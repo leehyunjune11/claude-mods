@@ -1,0 +1,568 @@
+import { atom, read, update } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
+
+import type { IdleRpgMeta as Meta, IdleRpgSave as Save, IdleRpgSkillId as SkillId } from '../types'
+import {
+  AUTO_MS,
+  BOSS_NAME,
+  EXP_PER_USD,
+  GACHA_COST,
+  GEAR_MULT,
+  KILLS_PER_STAGE,
+  MAX_SKILL,
+  RARITY_NAMES,
+  SKILLS,
+  SKILL_NAMES,
+  SLOTS,
+  SLOT_EFFECTS,
+  SLOT_NAMES,
+  apply,
+  attack,
+  costExp,
+  enhance,
+  enhanceCost,
+  foeOf,
+  fresh,
+  gacha,
+  gearMult,
+  join,
+  learn,
+  levelInfo,
+  mobIndex,
+  parseSave,
+  share,
+  skillPoints,
+  stageOf,
+  total,
+} from './game'
+import type { GameEvent, Hit, Purchase } from './game'
+import { BOSS, FONT, HERO_IDLE, HERO_SWING, MOBS, PALETTE, SCENE } from './sprites'
+
+const RASTER = 'field'
+const FRAME_MS = 83
+const IDLE_MS = 1000
+const IDLE_STEPS = 4 // frames of the scene a slow tick plays: a swing lands within one
+// Time counts while the session is open, drawn or not; a longer gap (a night asleep) counts as this.
+const CATCH_UP_MS = 8 * 3_600_000
+
+const save = atom({ plugin: 'idle-rpg', key: 'save' } as const, fresh(), { shape: 'save-1' })
+const base = atom({ plugin: 'idle-rpg', key: 'base' } as const, fresh(), { shape: 'save-1' })
+const meta = atom({ plugin: 'idle-rpg', key: 'meta' } as const, { on: true } as Meta, { shape: 'meta-1' })
+
+// --- The scene: 10 pixels tall, one cell to two pixels, the ground on the last pixel.
+
+const ROWS = 5
+const H = ROWS * 2
+const GROUND = H - 1
+const MAX_COLS = 72
+const MIN_COLS = 40 // the hero, a boss and a damage number side by side
+const HERO_X = 2
+const MOB_X = 18
+const SWING = 4 // frames an attack takes
+const IMPACT = 2 // the frame of it that lands
+const FLASH = 3
+const ENTER = 8 // frames a monster takes to walk in
+const FLOAT = 10
+const QUEUE = 4
+
+const rgb = (hex: string) => Number.parseInt(hex.slice(1), 16)
+const PAL = Object.fromEntries(Object.entries(PALETTE).map(([c, hex]) => [c, rgb(hex)]))
+const COLOR = Object.fromEntries(Object.entries(SCENE).map(([name, hex]) => [name, rgb(hex)])) as Record<keyof typeof SCENE, number>
+
+export type View = { kills: number; boss: boolean; left: number }
+
+export type Scene = {
+  t: number
+  /** Hits still to play, the newest last. */
+  queue: Hit[]
+  /** The hit being played. */
+  cur?: Hit
+  swing: number
+  flash: number
+  enter: number
+  floats: { text: string; crit: boolean; y: number; life: number }[]
+}
+
+export const newScene = (): Scene => ({ t: 0, queue: [], swing: 0, flash: 0, enter: 0, floats: [] })
+
+const damageText = (dmg: number) =>
+  dmg < 10_000 ? String(dmg) : dmg < 1e7 ? `${Math.floor(dmg / 1000)}K` : dmg.toExponential(0).replace('e+', 'E')
+
+/** Advances one frame; `dt` moves only the idle clock, for the slow timer. */
+export const stepScene = (s: Scene, dt = 1) => {
+  s.t += dt
+  if (s.enter > 0) s.enter--
+  if (s.flash > 0) s.flash--
+  if (s.swing > 0) {
+    s.swing--
+    if (s.swing === IMPACT && s.cur) {
+      s.flash = FLASH
+      s.floats.push({ text: damageText(s.cur.dmg), crit: s.cur.crit, y: 4, life: FLOAT })
+    }
+  }
+  if (s.cur && s.swing === 0 && s.flash === 0) {
+    if (s.cur.killed) s.enter = ENTER
+    s.cur = undefined
+  }
+  if (!s.cur && s.enter === 0 && s.queue.length > 0) {
+    s.cur = s.queue.shift()
+    s.swing = SWING
+  }
+  for (const f of s.floats) {
+    f.y -= 0.5
+    f.life--
+  }
+  s.floats = s.floats.filter(f => f.life > 0)
+}
+
+/** Whether the next frame differs by more than the idle bob: pick the fast timer. */
+export const isMoving = (s: Scene) => s.queue.length > 0 || s.cur !== undefined || s.enter > 0 || s.floats.length > 0
+
+/** The monster on screen: the save's, less the kills the scene has yet to play. */
+const viewOf = (s: Scene, x: Save): View => {
+  const unplayed = [...s.queue, ...(s.cur ? [s.cur] : [])].filter(hit => hit.killed)
+  const kills = Math.max(0, x.kills - unplayed.filter(hit => hit.advanced).length)
+  const foe = foeOf({ ...x, kills })
+  return { kills, boss: foe.boss, left: unplayed.length > 0 ? 0 : Math.max(0, 1 - x.dmg / foe.hp) }
+}
+
+/** One color per pixel, row-major, `cols * H`. */
+export const paintScene = (s: Scene, view: View, cols: number) => {
+  const p = new Uint32Array(cols * H).fill(COLOR.sky)
+  const px = (x: number, y: number, c: number) => {
+    const a = Math.round(x)
+    const b = Math.round(y)
+    if (a >= 0 && a < cols && b >= 0 && b < H) p[b * cols + a] = c
+  }
+  const sprite = (rows: readonly string[], sx: number, sy: number, ink?: number) => {
+    rows.forEach((row, j) => {
+      ;[...row].forEach((c, i) => {
+        const color = c === '.' ? undefined : (ink ?? PAL[c])
+        if (color !== undefined) px(sx + i, sy + j, color)
+      })
+    })
+  }
+
+  for (let x = 0; x < cols; x++) {
+    if ((x * 7919) % 11 === 0) px(x, (x * 31) % 6, COLOR.star)
+    px(x, GROUND, COLOR.ground)
+  }
+
+  const beat = (s.t >> 3) & 1
+  const hero = s.swing > IMPACT ? HERO_SWING[0] : s.cur ? HERO_SWING[1] : HERO_IDLE[beat]
+  if (hero) sprite(hero, HERO_X, GROUND - hero.length)
+
+  const mob = view.boss ? BOSS : (MOBS[mobIndex(view.kills)] ?? BOSS)
+  const wide = mob[0]?.length ?? 0
+  const mobX = MOB_X + Math.round(((cols - MOB_X) * s.enter) / ENTER)
+  const hop = mob.length < GROUND && s.enter % 2 === 1 ? 1 : mob.length < GROUND && s.enter === 0 && !s.cur ? beat : 0
+  sprite(mob, mobX, GROUND - mob.length - hop, s.flash > 0 ? COLOR.flash : undefined)
+  if (s.enter === 0) {
+    const full = Math.round(wide * view.left)
+    for (let i = 0; i < wide; i++) px(mobX + i, GROUND, i < full ? COLOR.hp : COLOR.hpLost)
+  }
+
+  s.floats.forEach((f, n) => {
+    ;[...f.text].forEach((digit, i) => {
+      sprite(FONT[digit] ?? [], MOB_X + wide + 2 + i * 4 + n * 2, f.y, f.crit ? COLOR.crit : COLOR.damage)
+    })
+  })
+  return p
+}
+
+const UPPER_HALF = 0x2580
+
+/** RasterProps `cells`: an upper half block per cell, its foreground the upper pixel. */
+export const sceneCells = (s: Scene, view: View, cols: number) => {
+  const p = paintScene(s, view, cols)
+  const words = new Uint32Array(cols * ROWS * 3)
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < cols; c++) {
+      const at = (r * cols + c) * 3
+      words[at] = UPPER_HALF
+      words[at + 1] = p[r * 2 * cols + c] ?? 0
+      words[at + 2] = p[(r * 2 + 1) * cols + c] ?? 0
+    }
+  }
+  const bytes = new Uint8Array(words.buffer) as Uint8Array & { toBase64: () => string }
+  return bytes.toBase64()
+}
+
+// ponytail: counts a column of texts, fields and bordered boxes, which is what the taxi and the
+// office draw; a text that wraps or a box with margins counts short, and the band then scrolls.
+/** The rows a settled tree takes. */
+export const rowsOf = (node: unknown): number => {
+  if (typeof node !== 'object' || node === null) return 0
+  const { type, props, children } = node as { type?: string; props?: Record<string, unknown>; children?: unknown }
+  if (type === 'Raster') return Number(props?.rows) || 0
+  if (type !== 'Box') return 1
+  const inner = [children].flat(Infinity).map(rowsOf)
+  const stacked = props?.flexDirection === 'column' ? inner.reduce((sum, n) => sum + n, 0) : Math.max(0, ...inner)
+  return stacked + (props?.borderStyle ? 2 : 0)
+}
+
+/** What this row draws in a band of `maxRows` where other plugins' rows take `others`. */
+export const bandLayout = (maxRows: number, columns: number, others: number) => {
+  const room = maxRows - others
+  if (room > ROWS && columns >= MIN_COLS) return 'field'
+  return room >= 1 ? 'line' : 'none'
+}
+
+// --- Words.
+
+const UNITS = ['', 'K', 'M', 'B', 'T']
+export const amount = (n: number) => {
+  if (n < 10_000) return String(Math.floor(n))
+  if (n >= 1e15) return n.toExponential(1).replace('+', '')
+  const unit = Math.floor(Math.log10(n) / 3)
+  return `${(n / 1000 ** unit).toFixed(1)}${UNITS[unit]}`
+}
+const BAR = 8
+const expBar = (x: Save) => {
+  const { into, need } = levelInfo(x.exp)
+  const full = Math.min(BAR, Math.floor((into / need) * BAR))
+  return '█'.repeat(full) + '░'.repeat(BAR - full)
+}
+const stageLabel = (x: Save) => `${stageOf(x.kills)}-${(x.kills % KILLS_PER_STAGE) + 1}`
+const foe = (x: Save) => {
+  const { name, hp } = foeOf(x)
+  return `${name} ${amount(Math.max(0, hp - x.dmg))}/${amount(hp)}`
+}
+const bossWait = (x: Save) => {
+  const { need } = foeOf(x)
+  return need > 0 ? `보스 ${BOSS_NAME}은 공격력 ${amount(need)}부터 나와요` : ''
+}
+
+const SKILL_HELP: Record<SkillId, string> = {
+  flurry: '도구 호출 때 15%씩 한 번 더 강타',
+  crit: '5%씩 치명타 확률, 치명타는 2.5배',
+  greed: '골드 +10%씩',
+}
+
+export const report = (x: Save) => {
+  const { level, into, need } = levelInfo(x.exp)
+  const gear = SLOTS.map(slot => {
+    const rarity = x.gear[slot]
+    return `${SLOT_NAMES[slot]} ${RARITY_NAMES[rarity]}${rarity > 0 ? `(${SLOT_EFFECTS[slot]} x${GEAR_MULT[slot][rarity]})` : ''}`
+  })
+  return [
+    `디버거 기사 Lv.${level} · 다음 레벨까지 경험치 ${amount(Math.ceil(need - into))}`,
+    `스테이지 ${stageLabel(x)} · 상대: ${foe(x)}${bossWait(x) && ` · ${bossWait(x)}`}`,
+    `골드 ${amount(x.gold)} · 공격력 ${amount(attack(x))} · 강화 +${x.enhance}`,
+    `장비: ${gear.join(' · ')}`,
+    `스킬 (남은 포인트 ${skillPoints(x)}): ${SKILLS.map(id => `${SKILL_NAMES[id]} ${x.skills[id]}/${MAX_SKILL}`).join(' · ')}`,
+    `다음 강화: ${amount(enhanceCost(x))}골드 · 뽑기: ${GACHA_COST}골드`,
+    '',
+    '명령',
+    '  /rpg 강화: 공격력 10% 증가 (한 번)',
+    '  /rpg 강화 최대: 골드가 되는 만큼 강화',
+    '  /rpg 뽑기: 무작위 장비 (일반 60% · 희귀 28% · 영웅 10% · 전설 2%)',
+    ...SKILLS.map(id => `  /rpg 스킬 ${SKILL_NAMES[id]}: ${SKILL_HELP[id]}`),
+    '  /rpg 끄기 · /rpg 켜기: 띠 숨기기 · 다시 보이기 (꺼도 사냥은 계속돼요)',
+  ].join('\n')
+}
+
+// --- The simulation: apart from the drawing, so it goes on while the band is hidden.
+
+// Module variables: a reload starts them over, and the render hook starts the timer again.
+let scene = newScene()
+let cols = MAX_COLS
+let band = ''
+let anim: Timer | undefined
+let animFast = false
+let denied = 0
+let working = false // a model turn is running: the field plays every frame
+let otherRows = 0 // what the other plugins' rows take of the band
+let lastAt = 0
+let spare = 0 // elapsed time short of one attack
+let saving: Promise<unknown> = Promise.resolve()
+
+const play = async ($: EngineInterface, event: GameEvent) => {
+  let hits: Hit[] = []
+  await update($, save, x => {
+    const next = apply(x, event, Math.random)
+    hits = next.hits
+    return next.save
+  })
+  // A long catch-up is hundreds of hits: the scene plays the last few.
+  scene.queue = [...scene.queue, ...hits].slice(-QUEUE)
+}
+
+/** Turns the time since the last call into auto attacks. */
+const advance = async ($: EngineInterface) => {
+  const now = await $.clock.now()
+  // No await between reading and moving lastAt: the timer, tool calls and commands all come here.
+  const elapsed = lastAt === 0 ? 0 : Math.min(Math.max(0, now - lastAt), CATCH_UP_MS)
+  lastAt = Math.max(lastAt, now)
+  spare += elapsed
+  const ms = spare - (spare % AUTO_MS)
+  if (ms === 0) return
+  spare -= ms
+  await play($, { type: 'tick', ms })
+}
+
+const LEGACY = 'save' // the one save every session used to write; read as a share, never written
+const rowKey = (id: string) => `s:${id}`
+
+// ponytail: as the taxi's ledger, a row per session and one store.get each per read; rows are never
+// folded. Fine to thousands; past that, fold the rows of ended sessions into one key.
+const others = async ($: EngineInterface, id: string) => {
+  const keys = (await $.store.keys()).filter(k => k.startsWith('s:') && k !== rowKey(id))
+  const rows = await Promise.all([LEGACY, ...keys].map(k => $.store.get(k)))
+  return rows.map(parseSave).reduce(join, fresh())
+}
+
+/**
+ * Writes this session's row, the only one it ever writes, so no two sessions race and a write that
+ * fails is made good by the next. With `rescan` the other rows are read again first: what another
+ * session earned or spent, and how far it got, joins the save.
+ */
+const sync = ($: EngineInterface, rescan = true) => {
+  const run = async () => {
+    const [id, m, held] = await Promise.all([$.session.id(), read($, meta), read($, base)])
+    // A fresh process, or a /clear that moved the session under this one.
+    const moved = m.id !== id
+    // The session left behind gets the last of its row, and counts with the others from here.
+    if (moved && m.id !== undefined) await $.store.set(rowKey(m.id), share(await read($, save), held))
+    // A resumed session finds its row; a hot reload over a save from before rows has progress to keep.
+    const seed = moved ? parseSave(await $.store.get(rowKey(id))) : undefined
+    const rest = rescan || moved ? await others($, id) : held
+    const merged = await update($, save, mine =>
+      total(rest, !seed ? share(mine, held) : m.id === undefined ? join(seed, share(mine, held)) : seed),
+    )
+    await update($, base, () => rest)
+    if (moved) await update($, meta, x => ({ ...x, id }))
+    await $.store.set(rowKey(id), share(merged, rest))
+  }
+  saving = saving.then(run, run)
+  return saving
+}
+
+const seedCost = async ($: EngineInterface) => {
+  const { cost } = await $.session.usage()
+  await update($, meta, m => ({ ...m, lastUsd: cost?.usd }))
+}
+
+const stopAnim = () => {
+  anim?.cancel()
+  anim = undefined
+}
+
+const DENY_RETRIES = 3
+const RETRY_MS = 500
+
+const frame = async ($: EngineInterface) => {
+  const mine = anim
+  await advance($)
+  const x = await read($, save)
+  // A slow tick plays a few frames at once: the swing, the flash and the number still read.
+  for (let i = animFast ? 1 : IDLE_STEPS; i > 0; i--) stepScene(scene, animFast ? 1 : 2)
+  const shown = await $.ui.blit({ requestId: band, key: RASTER, cells: sceneCells(scene, viewOf(scene, x), cols) })
+  // An old frame still in flight has no say over the timer that replaced it.
+  if (anim !== mine) return
+  if (!shown.deny) {
+    denied = 0
+    startAnim($, working && isMoving(scene))
+    return
+  }
+  stopAnim()
+  // Denied before it mounted, the drawing would wait for the next change of state: ask again, a
+  // few times, for a band that may just be slow to appear. Any later change still restarts it.
+  if (denied++ < DENY_RETRIES) {
+    $.clock.after(RETRY_MS, () => {
+      $.ui.invalidate('ui.render')
+    })
+  }
+}
+
+// One timer, whoever asks; a band no longer mounted denies the blit and ends it, and its next
+// drawing starts it again.
+const startAnim = ($: EngineInterface, fast: boolean) => {
+  if (anim && animFast === fast) return
+  anim?.cancel()
+  animFast = fast
+  const timer = $.clock.every(fast ? FRAME_MS : IDLE_MS, () => {
+    void frame($).catch(() => {
+      if (anim === timer) stopAnim()
+    })
+  })
+  anim = timer
+}
+
+// --- /rpg
+
+const SKILL_IDS: Record<string, SkillId> = Object.fromEntries(SKILLS.map(id => [SKILL_NAMES[id], id]))
+
+const buy = async ($: EngineInterface, purchase: (x: Save) => Purchase) => {
+  let result: Purchase = { refused: '' }
+  await update($, save, x => {
+    result = purchase(x)
+    return 'refused' in result ? x : result.save
+  })
+  return result as Purchase
+}
+
+const setOn = async ($: EngineInterface, on: boolean) => {
+  await $.store.set('on', on)
+  await update($, meta, m => ({ ...m, on }))
+  return on ? '띠를 켰어요.' : '띠를 껐어요. 사냥은 계속돼요. /rpg 켜기 로 다시 볼 수 있어요.'
+}
+
+const command = async ($: EngineInterface, args: string): Promise<string> => {
+  const [verb = '', arg = ''] = args.normalize('NFC').trim().split(/\s+/)
+  const settle = async (result: Purchase, say: (x: Save, note: string) => string) => {
+    if ('refused' in result) return result.refused
+    await sync($, false)
+    return say(await read($, save), result.note)
+  }
+  const goldLeft = (x: Save) => `남은 골드 ${amount(x.gold)}.`
+
+  if (verb === '') return report(await read($, save))
+  if (verb === '끄기' || verb === '켜기') return setOn($, verb === '켜기')
+  if (verb === '강화') {
+    const before = (await read($, save)).enhance
+    return settle(await buy($, x => enhance(x, arg === '최대')), x => {
+      const count = x.enhance - before
+      return `강화 +${x.enhance} 성공${count > 1 ? ` (${count}번)` : ''}! 공격력 ${amount(attack(x))}. ${goldLeft(x)}`
+    })
+  }
+  if (verb === '뽑기') return settle(await buy($, x => gacha(x, Math.random)), (x, note) => `${note} ${goldLeft(x)}`)
+  if (verb === '스킬') {
+    const id = SKILL_IDS[arg]
+    if (!id) return `스킬 이름을 적어 주세요: ${SKILLS.map(s => SKILL_NAMES[s]).join(', ')}`
+    return settle(await buy($, x => learn(x, id)), (x, note) => `${note} 습득! 남은 포인트 ${skillPoints(x)}.`)
+  }
+  return `모르는 명령이에요: ${verb}\n/rpg 만 입력하면 상태와 명령 목록을 볼 수 있어요.`
+}
+
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    await $.command.register({
+      name: 'rpg',
+      description: '방치형 RPG: 상태 보기, 강화, 뽑기, 스킬',
+      argumentHint: '[강화 [최대] | 뽑기 | 스킬 <이름> | 끄기 | 켜기]',
+    })
+    const stored = await $.store.get('on')
+    await update($, meta, m => ({ ...m, on: stored !== false }))
+    // A reload comes here again mid-session: the bill it already holds is the one to count from.
+    if ((await read($, meta)).lastUsd === undefined) await seedCost($)
+    // The first call only starts the clock: time counts from here.
+    await advance($)
+    // After a reload this runs again over progress not yet saved: the row keeps it.
+    await sync($)
+    // A band that stayed up through a reload needs drawing to start its timer again.
+    $.ui.invalidate('ui.render')
+    return next(e)
+  })
+
+  // /clear fires no session.start, and a resumed session's bill is not this one's spending.
+  on('classic.SessionStart', async ($, e, next) => {
+    if (e.source === 'clear') {
+      await update($, meta, m => ({ ...m, lastUsd: 0 }))
+      await sync($)
+    }
+    if (e.source === 'resume' || e.source === 'fork') await seedCost($)
+    return next(e)
+  })
+
+  on('command.run', { command: 'rpg' }, async ($, e) => {
+    await advance($)
+    // Gold another session spent or earned since the last save counts before anything is bought.
+    await sync($)
+    return { text: await command($, e.args) }
+  })
+
+  on('session.measure', async ($, e, next) => {
+    if (!e.cost) return next(e)
+    const { usd } = e.cost
+    const rate = EXP_PER_USD * gearMult(await read($, save), 'ring')
+    let exp = 0
+    await update($, meta, m => {
+      const paid = costExp(m.lastUsd, usd, rate)
+      exp = paid.exp
+      return { ...m, lastUsd: paid.lastUsd }
+    })
+    if (exp > 0) await play($, { type: 'exp', exp })
+    return next(e)
+  })
+
+  // The call goes first and never waits on the game: a failed hit is dropped, not the tool.
+  on('tool.call', ($, e, next) => {
+    void advance($)
+      .then(() => play($, { type: 'tool' }))
+      .catch(() => {})
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    await advance($)
+    // A save that fails costs the turn nothing: the next one writes the same row.
+    if (e.agentId === undefined) await sync($, false).catch(() => {})
+    return next(e)
+  })
+
+  on('session.end', async ($, e, next) => {
+    await sync($, false).catch(() => {})
+    return next(e)
+  })
+
+  // The band's rows are every plugin's together: this row makes room for another's.
+  on('ui.render', { component: 'AbovePromptList' }, ($, e, next) => {
+    const now = e.props.rows.reduce((sum, row) => sum + (row.plugin === 'idle-rpg' ? 0 : rowsOf(row.tree)), 0)
+    if (now !== otherRows) {
+      otherRows = now
+      $.clock.after(0, () => {
+        $.ui.invalidate('ui.render')
+      })
+    }
+    return next(e)
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey || !(await read($, meta)).on) {
+      stopAnim()
+      return next(e)
+    }
+    const x = await read($, save)
+    const { level } = levelInfo(x.exp)
+    const { Box, Text } = $.ui.resolve(e)
+    const line = (
+      <Text wrap="truncate-end">
+        <Text bold color={SCENE.crit}>
+          Lv.{level}
+        </Text>
+        <Text color="#5fd38a"> {expBar(x)}</Text>
+        <Text>
+          {'  '}스테이지 {stageLabel(x)}
+          {'  '}골드 {amount(x.gold)}
+          {'  '}공격력 {amount(attack(x))}
+        </Text>
+        <Text dimColor>
+          {'  '}
+          {foe(x)}
+          {bossWait(x) && ' (보스 대기)'}
+        </Text>
+      </Text>
+    )
+    // Another surface's drawing says nothing about the terminal's timer.
+    if (e.surface !== 'terminal') return <Box flexDirection="column">{line}</Box>
+    const width = Math.min(e.props.bodyColumns, MAX_COLS)
+    // A collapsed band shows nothing: no field to keep drawing.
+    const layout = e.props.isCollapsed ? 'line' : bandLayout(e.props.maxRows, width, otherRows)
+    if (layout !== 'field') {
+      stopAnim()
+      return layout === 'none' ? next(e) : <Box flexDirection="column">{line}</Box>
+    }
+    working = e.props.isWorking
+    cols = width
+    band = e.requestId
+    startAnim($, working && isMoving(scene))
+    const { Raster } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        <Raster key={RASTER} columns={cols} rows={ROWS} cells={sceneCells(scene, viewOf(scene, x), cols)} />
+        {line}
+      </Box>
+    )
+  })
+}

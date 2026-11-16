@@ -1,0 +1,4 @@
+node_modules/
+.DS_Store
+office/todos.json
+__pycache__/
