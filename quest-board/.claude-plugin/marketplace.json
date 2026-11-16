@@ -1,0 +1,11 @@
+{
+  "name": "claude-rpg-quest-mod",
+  "owner": { "name": "yudility" },
+  "plugins": [
+    {
+      "name": "quest-board",
+      "source": "./",
+      "description": "할 일을 RPG 퀘스트로: 픽셀아트 방치형 전투 화면 + 퀘스트 패널"
+    }
+  ]
+}
