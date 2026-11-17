@@ -126,10 +126,12 @@ export type Scene = {
   swing: number
   flash: number
   enter: number
+  /** Frames walked so far, each monster's walk-in being ENTER of them: it slides the hills. */
+  walked: number
   floats: { text: string; crit: boolean; y: number; life: number }[]
 }
 
-export const newScene = (): Scene => ({ t: 0, queue: [], swing: 0, flash: 0, enter: 0, floats: [] })
+export const newScene = (): Scene => ({ t: 0, queue: [], swing: 0, flash: 0, enter: 0, walked: 0, floats: [] })
 
 const damageText = (dmg: number) =>
   dmg < 10_000 ? String(dmg) : dmg < 1e7 ? `${Math.floor(dmg / 1000)}K` : dmg.toExponential(0).replace('e+', 'E')
@@ -137,7 +139,10 @@ const damageText = (dmg: number) =>
 /** Advances one frame; `dt` moves only the idle clock, for the slow timer. */
 export const stepScene = (s: Scene, dt = 1) => {
   s.t += dt
-  if (s.enter > 0) s.enter--
+  if (s.enter > 0) {
+    s.enter--
+    s.walked++
+  }
   if (s.flash > 0) s.flash--
   if (s.swing > 0) {
     s.swing--
@@ -232,8 +237,8 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
       for (let i = 0; i < 6; i++) px(x0 + i, y + 1, COLOR.star)
     }
   }
-  // Far hills and a tree every 17 columns, slid along by the kills: the hero walks on to each monster.
-  const walk = Math.round((view.kills - s.enter / ENTER) * 6)
+  // Far hills and a tree every 17 columns, slid along as each monster walks in, 6 pixels a monster.
+  const walk = Math.round((s.walked * 6) / ENTER)
   for (let x = 0; x < cols; x++) {
     const u = x + walk
     const rise = 1 + Math.round((1.5 + 1.5 * Math.sin(u / 6)) * (H / 10))

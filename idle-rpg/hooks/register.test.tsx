@@ -753,8 +753,20 @@ test('every monster in every stage color, both frames, draws nothing near white 
 
 test('the hills slide along as a new monster walks in, and the day clouds drift with time', () => {
   const hill = hexOf(SCENE.hill)
-  const sky = (kills: number) => [...paintScene(newScene(), { kills, boss: false, left: 1 }, 72)].map(c => c === hill)
-  expect(sky(1)).not.toEqual(sky(0))
+  // The row above the ground, right of the monster: hills, trees and sky only.
+  const hills = (walked: number) => {
+    const scene = newScene()
+    scene.walked = walked
+    return [...paintScene(scene, { kills: 25, boss: false, left: 1 }, 72).slice(8 * 72 + 40, 9 * 72)].map(c => c === hill)
+  }
+  // One monster's walk-in slides them 6 pixels on, whatever the kill count says.
+  expect(hills(8).slice(0, 26)).toEqual(hills(0).slice(6, 32))
+  expect(hills(8)).not.toEqual(hills(0))
+  // A kill that leaves the count where it was (보스 대기) still walks the whole way on.
+  const scene = newScene()
+  scene.queue.push({ dmg: 1, crit: false, killed: true, boss: false, advanced: false })
+  for (let i = 0; i < 20; i++) stepScene(scene)
+  expect(scene.walked).toBe(8)
   const cloud = hexOf(DAY_SCENE.star)
   const at = (t: number) => {
     const scene = newScene()

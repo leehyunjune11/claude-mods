@@ -41,11 +41,11 @@ export const PALETTE: Record<string, string> = {
 
 /** The night scheme, the one drawn on a dark terminal. `star` dots its sky. */
 export const SCENE = {
-  sky: '#0d1220',
-  star: '#2c3654',
+  sky: '#1a2236',
+  star: '#4a5680',
   ground: '#3b4158',
-  hill: '#1c2540', // far hills
-  tree: '#18304a', // far trees
+  hill: '#273150', // far hills
+  tree: '#1f3a50', // far trees
   hp: '#e8483f',
   hpLost: '#3a1512',
   flash: '#ffffff',
