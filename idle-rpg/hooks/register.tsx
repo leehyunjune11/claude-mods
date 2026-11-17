@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { IdleRpgJobLine as JobLine, IdleRpgMeta as Meta, IdleRpgSave as Save, IdleRpgSkillId as SkillId } from '../types'
+import type { IdleRpgJobLine as JobLine, IdleRpgMeta as Meta, IdleRpgSave as Save, IdleRpgSkillId as SkillId, IdleRpgSlot as Slot } from '../types'
 import {
   ACTIVE_NAMES,
   BOSS_NAME,
@@ -43,6 +43,7 @@ import {
   lineChangeCost,
   mobIndex,
   zoneOf,
+  forgeOf,
   ZONE_STAGES,
   ZONES,
   parseSave,
@@ -394,6 +395,8 @@ const expBar = (x: Save) => {
   const full = Math.min(BAR, Math.floor((into / need) * BAR))
   return '█'.repeat(full) + '░'.repeat(BAR - full)
 }
+/** A slot's 합성 level, as the report and the pane write it after the rarity; nothing at 0. */
+const stars = (x: Save, slot: Slot) => (forgeOf(x, slot) > 0 ? `★${forgeOf(x, slot)}` : '')
 const zoneName = (x: Save) => ZONES[zoneOf(x.kills)]?.name ?? ''
 /** The stages of the zone the hero is in. */
 const zoneStages = (x: Save) => {
@@ -461,7 +464,7 @@ export const report = (x: Save) => {
   const { level, into, need } = levelInfo(x.exp)
   const gear = SLOTS.map(slot => {
     const rarity = x.gear[slot]
-    return `${SLOT_NAMES[slot]} ${RARITY_NAMES[rarity]}${rarity > 0 ? `(${SLOT_EFFECTS[slot]} x${GEAR_MULT[slot][rarity]})` : ''}`
+    return `${SLOT_NAMES[slot]} ${RARITY_NAMES[rarity]}${stars(x, slot)}${rarity > 0 ? `(${SLOT_EFFECTS[slot]} x${Number(gearMult(x, slot).toFixed(2))})` : ''}`
   })
   return [
     `${jobName(jobOf(x))} Lv.${level} · 다음 레벨까지 경험치 ${amount(Math.ceil(need - into))}`,
@@ -1034,7 +1037,7 @@ export const register: Register = on => {
           골드 {amount(x.gold)} · 공격력 {amount(attack(x))} · 강화 +{x.enhance}
           {canApply(x) && <Text color={SCENE.crit}> · 전직 가능</Text>}
         </Text>
-        <Text>장비: {SLOTS.map(slot => `${SLOT_NAMES[slot]} ${RARITY_NAMES[x.gear[slot]]}`).join(' · ')}</Text>
+        <Text>장비: {SLOTS.map(slot => `${SLOT_NAMES[slot]} ${RARITY_NAMES[x.gear[slot]]}${stars(x, slot)}`).join(' · ')}</Text>
         <Box columnGap={2} flexWrap="wrap">
           {key('e', `강화 (${amount(enhanceCost(x))}골드)`, '강화')}
           {key('m', '강화 최대', '강화 최대')}

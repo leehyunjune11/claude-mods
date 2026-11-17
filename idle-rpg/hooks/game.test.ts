@@ -18,7 +18,7 @@ import {
   fresh,
   gacha,
   isBoss,
-  join,
+  MAX_FORGE, gearMult, join,
   jobOf,
   learn,
   levelOf,
@@ -159,9 +159,15 @@ test('gacha draws the slot and rarity the dice say, and never downgrades', () =>
   expect(legend.gear).toEqual({ weapon: 4, armor: 0, ring: 0 })
   expect(legend.gold).toBe(0)
 
+  // No better than what is worn: 합성, a level on the slot and its effect.
   const worse = bought(gacha({ ...legend, gold: 300 }, rolls(0, 0.1)))
   expect(worse.gear.weapon).toBe(4)
-  expect(worse.gold).toBe(90)
+  expect(worse.gold).toBe(0)
+  expect(worse.forge).toEqual({ weapon: 1, armor: 0, ring: 0 })
+  expect(Math.abs(gearMult(worse, 'weapon') - gearMult(legend, 'weapon') * 1.05)).toBeLessThan(1e-9)
+  // At the top 합성 level it pays some gold back instead.
+  const capped = bought(gacha({ ...legend, gold: 300, forge: { weapon: MAX_FORGE, armor: 0, ring: 0 } }, rolls(0, 0.1)))
+  expect([capped.gold, capped.forge?.weapon]).toEqual([90, MAX_FORGE])
 
   const rarityAt = (roll: number) => bought(gacha(having({ gold: 300 }), rolls(0.5, roll))).gear.armor
   expect([0, 0.59, 0.6, 0.87, 0.88, 0.97, 0.98].map(rarityAt)).toEqual([1, 1, 2, 2, 3, 3, 4])
@@ -476,4 +482,14 @@ test("an auto attack is now and then the line's skill, from 1차 on, striking fo
   // The 인턴 has none, however the dice fall.
   expect(autoAttack(fresh(), 1500, () => 0).hits[0]?.skill).toBeUndefined()
   expect(Object.keys(ACTIVE_NAMES).sort()).toEqual(['magic', 'melee', 'ranged', 'rogue'])
+})
+
+test('합성 levels join by the higher per slot, and a bad one drops alone', () => {
+  const a = { ...fresh(), forge: { weapon: 3, armor: 0, ring: 1 } }
+  const b = { ...fresh(), forge: { weapon: 1, armor: 2, ring: 0 } }
+  expect(join(a, b).forge).toEqual({ weapon: 3, armor: 2, ring: 1 })
+  expect(join(fresh(), fresh()).forge).toBeUndefined()
+  expect(parseSave({ ...a, forge: { weapon: -1, armor: 0, ring: 0 } })).toEqual(fresh())
+  expect(parseSave({ ...a, kills: 4, forge: 'lots' })).toEqual({ ...fresh(), kills: 4 })
+  expect(parseSave(a).forge).toEqual(a.forge)
 })

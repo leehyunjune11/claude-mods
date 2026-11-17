@@ -44,6 +44,11 @@ export type IdleRpgSave = {
    * later change winning. Absent on saves from before jobs, and read as 인턴.
    */
   job?: IdleRpgJob
+  /**
+   * Each slot's 합성 level: a 뽑기 no better than what is worn adds one. Rows join it by the higher
+   * per slot. Absent on saves from before it, and read as 0.
+   */
+  forge?: Record<IdleRpgSlot, number>
 }
 
 export type IdleRpgMeta = {

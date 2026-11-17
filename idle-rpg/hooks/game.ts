@@ -12,6 +12,9 @@ export const KILLS_PER_STAGE = 10
 export const MAX_SKILL = 5
 export const GACHA_COST = 300
 const GACHA_REFUND = 90
+/** 합성 adds this much of a slot's effect a level, up to MAX_FORGE levels. */
+const FORGE_STEP = 0.05
+export const MAX_FORGE = 30
 const CRIT_HIT = 2.5
 const CRIT_CHANCE = 0.05
 const FLURRY_CHANCE = 0.15
@@ -154,7 +157,8 @@ export const mobIndex = (kills: number) => {
   return mobs[(stageOf(kills) - 1 + (kills % KILLS_PER_STAGE)) % mobs.length] ?? 0
 }
 
-export const gearMult = (save: Save, slot: Slot) => GEAR_MULT[slot][save.gear[slot]] ?? 1
+export const forgeOf = (save: Save, slot: Slot) => save.forge?.[slot] ?? 0
+export const gearMult = (save: Save, slot: Slot) => (GEAR_MULT[slot][save.gear[slot]] ?? 1) * (1 + FORGE_STEP * forgeOf(save, slot))
 export const attack = (save: Save) =>
   Math.round((8 + 2 * levelOf(save.exp)) * ENHANCE_ATTACK ** save.enhance * gearMult(save, 'weapon') * TIER_ATTACK[jobOf(save).tier])
 
@@ -311,10 +315,19 @@ export const gacha = (save: Save, rng: Rng): Purchase => {
   const roll = rng()
   const rarity = (1 + RARITY_EDGES.filter(edge => roll >= edge).length) as Rarity
   const drawn = `뽑기 결과: ${RARITY_NAMES[rarity]} ${SLOT_NAMES[slot]}.`
+  const level = forgeOf(save, slot)
+  if (rarity <= save.gear[slot] && level < MAX_FORGE) {
+    const forge = { ...perSlot(at => forgeOf(save, at)), [slot]: level + 1 }
+    const forged = { ...save, gold: save.gold - GACHA_COST, forge }
+    return {
+      save: forged,
+      note: `${drawn} 지금 ${SLOT_NAMES[slot]}에 합성해 ★${level + 1}이 됐어요! ${SLOT_EFFECTS[slot]} x${Number(gearMult(forged, slot).toFixed(2))}`,
+    }
+  }
   if (rarity <= save.gear[slot]) {
     return {
       save: { ...save, gold: save.gold - GACHA_COST + GACHA_REFUND },
-      note: `${drawn} 지금 장비(${RARITY_NAMES[save.gear[slot]]})보다 좋지 않아 ${GACHA_REFUND}골드를 돌려받았어요.`,
+      note: `${drawn} ${SLOT_NAMES[slot]} 합성이 최대(★${MAX_FORGE})라 ${GACHA_REFUND}골드를 돌려받았어요.`,
     }
   }
   return {
@@ -399,6 +412,7 @@ export const join = (a: Save, b: Save): Save => {
     skills: perSkill(id => a.skills[id] + b.skills[id]),
     dmg: far.dmg,
     ...(job && { job }),
+    ...((a.forge || b.forge) && { forge: perSlot(slot => Math.max(forgeOf(a, slot), forgeOf(b, slot))) }),
   }
 }
 
@@ -451,6 +465,8 @@ export const parseSave = (raw: unknown): Save => {
   if (!SLOTS.every(slot => isWhole(gear[slot], 4)) || !SKILLS.every(id => isShare(skills[id]))) return fresh()
   // A save from before exp was whole may hold a fraction.
   const job = parseJob(raw.job)
+  const { forge } = raw
+  const forged = isRecord(forge) && SLOTS.every(slot => isWhole(forge[slot], MAX_FORGE)) ? perSlot(slot => forge[slot] as number) : undefined
   return {
     v: 1,
     exp: Math.round(exp),
@@ -461,5 +477,6 @@ export const parseSave = (raw: unknown): Save => {
     gear: perSlot(slot => gear[slot] as Rarity),
     skills: perSkill(id => skills[id] as number),
     ...(job && { job }),
+    ...(forged && { forge: forged }),
   }
 }
