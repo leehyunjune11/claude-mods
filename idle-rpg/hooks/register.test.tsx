@@ -1027,3 +1027,30 @@ test("the day's missions count from where the day began, each pays once, and all
   expect(world.store.daily).toMatchObject({ day: '2026-11-17', from: { enhance: 10 } })
   expect(world.store.daily.paid).not.toContain('enhance')
 })
+
+test('a locked store at the start costs the offline reward, not the start, and the beat keeps on', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on, { seen: NOON - 5 * 3_600_000 })
+  let failed = false
+  world.onSet = key => {
+    if (key === 'seen' && !failed) {
+      failed = true
+      throw new Error('EBUSY: the store file is locked')
+    }
+  }
+  await start($)
+  expect(failed).toBe(true)
+  expect(world.store.seen).toBe(NOON - 5 * 3_600_000)
+  await clock.advance(30_000)
+  expect(world.store.seen).toBe(NOON + 30_000)
+})
+
+test('자동 typed in another session reaches an open one within the half minute', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on, { ...DONE_TODAY, save: stored({ gold: 100_000 }) })
+  await start($)
+  world.store.auto = true
+  await clock.advance(31_000)
+  await endTurn($)
+  expect(saved(world).enhance).toBeGreaterThan(30)
+})

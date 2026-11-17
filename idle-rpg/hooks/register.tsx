@@ -961,8 +961,10 @@ const missionLine = (x: Save) => {
 
 const checkDaily = async ($: EngineInterface) => {
   const day = dayOf(await $.clock.now())
-  const x = await read($, save)
   const kept = parseDaily(await $.store.get(DAILY))
+  // A new day starts from every row read in, not this session's last look at them.
+  if (kept?.day !== day) await sync($)
+  const x = await read($, save)
   const d = kept?.day === day ? kept : { day, from: dayStart(x), paid: [] }
   if (d !== kept) await $.store.set(DAILY, d)
   daily = d
@@ -1031,7 +1033,8 @@ export const register: Register = on => {
     await advance($)
     // After a reload this runs again over progress not yet saved: the row keeps it.
     await sync($)
-    await offline($)
+    // The store locked: no reward this time, and the start goes on.
+    await offline($).catch(() => {})
     // A band that stayed up through a reload needs drawing to start its timer again.
     $.ui.invalidate('ui.render')
     await readQuests($)
@@ -1039,7 +1042,11 @@ export const register: Register = on => {
     questTimer?.cancel()
     questTimer = $.clock.every(QUEST_MS, () => {
       void readQuests($)
-      void beat($)
+      void beat($).catch(() => {})
+      // 자동 typed in another session reaches this one within the half minute.
+      void $.store.get('auto').then(kept => {
+        auto = kept === true
+      }, () => {})
     })
     return next(e)
   })
