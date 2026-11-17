@@ -4,7 +4,7 @@ import type { On } from 'claude-code'
 import type { IdleRpgSave as Save } from '../types'
 import { apply, fresh, join, levelOf, parseSave, stageOf } from './game'
 import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene } from './register'
-import { DAY_PALETTE, DAY_SCENE, MOBS, SCENE } from './sprites'
+import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, SCENE } from './sprites'
 
 const BAND = {
   plugin: 'idle-rpg',
@@ -609,6 +609,29 @@ test('the day scheme draws in dark ink what the night draws white: no white on a
   expect(pale).toEqual([hexOf(DAY_SCENE.star)])
   expect(day.includes(hexOf(SCENE.sky))).toBe(false)
   expect(day.includes(hexOf(SCENE.damage)) || day.includes(hexOf(SCENE.flash))).toBe(false)
+})
+
+test('every look and the examiner, mid-attack on a day sky, draw nothing near white but the clouds', () => {
+  const cloud = hexOf(DAY_SCENE.star)
+  for (const look of Object.keys(LOOKS)) {
+    for (const exam of [false, true]) {
+      // The raised swing, then the landed one with its slash or shot, and a number floating.
+      const raised = newScene()
+      raised.cur = { dmg: 1, crit: false, killed: false, boss: false, advanced: false }
+      raised.swing = 4
+      const landed = newScene()
+      landed.queue.push({ dmg: 1234, crit: false, killed: false, boss: false, advanced: false })
+      for (let i = 0; i < 3; i++) stepScene(landed)
+      for (const scene of [raised, landed]) {
+        const day = paintScene(scene, { kills: 3, boss: false, left: 0.5, exam, look }, 72, 'light')
+        expect([look, [...new Set(day)].filter(c => c !== cloud && luminance(c) > 0.75)]).toEqual([look, []])
+      }
+    }
+  }
+  // The examiner stands where the monster would.
+  const plain = paintScene(newScene(), { kills: 3, boss: false, left: 1 }, 72)
+  const exam = paintScene(newScene(), { kills: 3, boss: false, left: 1, exam: true }, 72)
+  expect(exam).not.toEqual(plain)
 })
 
 test('/rpg 테마 picks the scheme, the store keeps it, and 시스템 follows macOS', async ($, on) => {

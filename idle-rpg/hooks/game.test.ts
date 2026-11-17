@@ -26,7 +26,7 @@ import {
   stageOf,
   total,
 } from './game'
-import { BOSS, FONT, HERO_IDLE, HERO_SWING, MOBS, PALETTE } from './sprites'
+import { BOSS, DAY_PALETTE, EXAMINER, FONT, HERO_IDLE, HERO_SWING, LOOKS, MOBS, PALETTE } from './sprites'
 
 const never = () => 0.99
 const rolls = (...values: number[]) => {
@@ -423,4 +423,29 @@ test('a hero who idles and spends all gold on 강화 passes each 전직 within 3
   const third = pass(idleUntil(second.x, x => levelOf(x.exp) >= 60).x, '')
   expect(third.hours).toBeLessThan(3) // measured: 1.38h
   expect(jobOf(third.x)).toMatchObject({ line: 'ranged', tier: 3 })
+})
+
+test('13 looks: the 인턴 and each line at 1차 to 3차, two standing frames and two of an attack, each its own', () => {
+  expect(Object.keys(LOOKS).sort()).toEqual(['intern', ...['melee', 'magic', 'ranged', 'rogue'].flatMap(line => [1, 2, 3].map(t => `${line}${t}`))].sort())
+  for (const [id, look] of Object.entries(LOOKS)) {
+    expect([id, look.idle.length, look.swing.length]).toEqual([id, 2, 2])
+    for (const rows of [...look.idle, ...look.swing]) {
+      expect(rows.length).toBeLessThanOrEqual(9)
+      expect(new Set(rows.map(row => row.length)).size).toBe(1)
+      for (const c of rows.join('')) expect(c === '.' || PALETTE[c] !== undefined).toBe(true)
+    }
+    for (const c of Object.keys(look.colors)) expect(PALETTE[c]).toBeDefined()
+  }
+  // No two looks the same: a tier shows in its colors, its cape or its crown.
+  const drawn = Object.values(LOOKS).map(look => JSON.stringify([look.idle, look.swing, { ...PALETTE, ...look.colors }]))
+  expect(new Set(drawn).size).toBe(13)
+  // A tier up draws more: 2차 a cape, 3차 a crown or aura besides.
+  for (const line of ['melee', 'magic', 'ranged', 'rogue']) {
+    const has = (tier: number, c: string) => (LOOKS[`${line}${tier}`]?.idle[0] ?? []).join('').includes(c)
+    expect([1, 2, 3].map(t => [has(t, 'Q'), has(t, 'X')])).toEqual([[false, false], [true, false], [true, true]])
+  }
+  expect(EXAMINER.length).toBeLessThanOrEqual(9)
+  expect(new Set(EXAMINER.map(row => row.length)).size).toBe(1)
+  for (const c of EXAMINER.join('')) expect(c === '.' || PALETTE[c] !== undefined).toBe(true)
+  for (const c of Object.keys(DAY_PALETTE)) expect(PALETTE[c]).toBeDefined()
 })

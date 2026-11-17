@@ -49,7 +49,7 @@ import {
   trait,
 } from './game'
 import type { GameEvent, Hit, Purchase } from './game'
-import { BOSS, FONT, HERO_IDLE, HERO_SWING, MOBS, PALETTE, SCENE, SCHEMES } from './sprites'
+import { BOSS, EXAMINER, FONT, LOOKS, MOBS, PALETTE, SCENE, SCHEMES } from './sprites'
 import type { Scheme } from './sprites'
 
 const RASTER = 'field'
@@ -84,13 +84,20 @@ const QUEUE = 4
 const rgb = (hex: string) => Number.parseInt(hex.slice(1), 16)
 const colors = <T extends Record<string, string>>(hexes: T) =>
   Object.fromEntries(Object.entries(hexes).map(([c, hex]) => [c, rgb(hex)])) as Record<keyof T, number>
-/** Each scheme's scene colors and its palette, the day's light-color swaps laid over PALETTE. */
-const INKS = {
-  dark: { color: colors(SCHEMES.dark.scene), pal: colors({ ...PALETTE, ...SCHEMES.dark.palette }) },
-  light: { color: colors(SCHEMES.light.scene), pal: colors({ ...PALETTE, ...SCHEMES.light.palette }) },
+const SCENE_COLORS = { dark: colors(SCHEMES.dark.scene), light: colors(SCHEMES.light.scene) }
+const pals = new Map<string, Record<string, number>>()
+/** A look's palette in a scheme: PALETTE, the look's colors over it, the day's swaps over both. */
+const palOf = (scheme: Scheme, look: string) => {
+  const key = `${scheme}:${look}`
+  const known = pals.get(key)
+  if (known) return known
+  const made = colors({ ...PALETTE, ...LOOKS[look]?.colors, ...SCHEMES[scheme].palette })
+  pals.set(key, made)
+  return made
 }
 
-export type View = { kills: number; boss: boolean; left: number }
+/** The monster on screen, and the hero's look (LOOKS; the 인턴's when absent). */
+export type View = { kills: number; boss: boolean; left: number; exam?: boolean; look?: string }
 
 export type Scene = {
   t: number
@@ -144,12 +151,22 @@ const viewOf = (s: Scene, x: Save): View => {
   const unplayed = [...s.queue, ...(s.cur ? [s.cur] : [])].filter(hit => hit.killed)
   const kills = Math.max(0, x.kills - unplayed.filter(hit => hit.advanced).length)
   const foe = foeOf({ ...x, kills })
-  return { kills, boss: foe.boss, left: unplayed.length > 0 ? 0 : Math.max(0, 1 - x.dmg / foe.hp) }
+  const { line, tier } = jobOf(x)
+  return {
+    kills,
+    boss: foe.boss,
+    // The hit being played says who it fell on: the examiner stays for its last blow.
+    exam: s.cur ? s.cur.exam === true : foe.exam,
+    left: unplayed.length > 0 ? 0 : Math.max(0, 1 - x.dmg / foe.hp),
+    look: line ? `${line}${tier}` : 'intern',
+  }
 }
 
 /** One color per pixel, row-major, `cols * H`. */
 export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 'dark') => {
-  const { color: COLOR, pal: PAL } = INKS[scheme]
+  const COLOR = SCENE_COLORS[scheme]
+  const PAL = palOf(scheme, view.look ?? 'intern')
+  const art = LOOKS[view.look ?? 'intern'] ?? LOOKS.intern
   const p = new Uint32Array(cols * H).fill(COLOR.sky)
   const px = (x: number, y: number, c: number) => {
     const a = Math.round(x)
@@ -179,10 +196,10 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
   }
 
   const beat = (s.t >> 3) & 1
-  const hero = s.swing > IMPACT ? HERO_SWING[0] : s.cur ? HERO_SWING[1] : HERO_IDLE[beat]
+  const hero = s.swing > IMPACT ? art?.swing[0] : s.cur ? art?.swing[1] : art?.idle[beat]
   if (hero) sprite(hero, HERO_X, GROUND - hero.length)
 
-  const mob = view.boss ? BOSS : (MOBS[mobIndex(view.kills)] ?? BOSS)
+  const mob = view.exam ? EXAMINER : view.boss ? BOSS : (MOBS[mobIndex(view.kills)] ?? BOSS)
   const wide = mob[0]?.length ?? 0
   const mobX = MOB_X + Math.round(((cols - MOB_X) * s.enter) / ENTER)
   const hop = mob.length < GROUND && s.enter % 2 === 1 ? 1 : mob.length < GROUND && s.enter === 0 && !s.cur ? beat : 0
