@@ -25,7 +25,17 @@ const engine = (on: On, store: Record<string, unknown> = {}) => {
     failSets: 0,
     onSet: undefined as ((key: string) => void) | undefined,
     toasts: [] as string[],
+    panes: [] as string[],
   }
+  on('ui.open', (_, e) => {
+    if (!world.panes.includes(e.id)) world.panes.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', (_, e) => {
+    world.panes = world.panes.filter(id => id !== e.id)
+    return { value: undefined }
+  })
+  on('ui.panes', () => ({ value: world.panes.map(id => ({ id, title: id, isShown: true, isFocused: true, isPlaced: true })) }))
   on('ui.toast', (_, e) => {
     world.toasts.push(e.text)
     return { value: undefined }
@@ -472,4 +482,85 @@ test('felling the examiner toasts the 전직 with the new name', async ($, on) =
   await endTurn($)
   expect(world.toasts).toContain('전직 완료! 이제 핫픽스 도적')
   expect(saved(world).job).toMatchObject({ line: 'rogue', tier: 1 })
+})
+
+const PANE = {
+  plugin: 'idle-rpg',
+  component: 'Pane',
+  requestId: 'rpg',
+  surface: 'terminal',
+  props: { title: 'RPG', isFocused: true, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+} as any
+
+test('/rpg opens the pane and still answers with the report, the job in it', async ($, on) => {
+  mock.clock(on, { now: NOON })
+  const world = engine(on, { save: stored({ exp: 6802, gold: 42 }) })
+  await start($)
+  const text = await rpg($)
+  expect(world.panes).toEqual(['rpg'])
+  expect(text).toContain('인턴 Lv.10')
+  expect(text).toContain('직업: 인턴 · 1차 전직 Lv.10부터 (지금 가능)')
+  expect(text).toContain('/rpg 전직 [근접|마법|원거리|암살]')
+  expect(text).toContain('/rpg 계열 <이름>')
+})
+
+test('the pane buys with its keys, as the commands do, and takes the hero through 전직 and 계열 변경', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on, { save: stored({ exp: 6802, gold: 200 }) })
+  await start($)
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ type: 'Text', text: /⚔ 인턴 Lv\.10/ }))).toBeDefined()
+
+  await ui.press({ key: '강화' })
+  expect(saved(world)).toMatchObject({ gold: 150, enhance: 1 })
+  await ui.redraw()
+  expect(await ui.find({ type: 'Text', text: /강화 \+1 성공/ })).toBeDefined()
+
+  // 인턴: four lines to pick, each with its 1차 name.
+  expect(await ui.find({ key: '전직 암살' })).toBeDefined()
+  await ui.press({ key: '전직 암살' })
+  expect(saved(world).job).toMatchObject({ tier: 0, trial: { line: 'rogue', hp: 600 } })
+  await ui.redraw()
+  expect(await ui.find({ type: 'Text', text: /전직 시험 중 → 핫픽스 도적/ })).toBeDefined()
+
+  await clock.advance(60_000)
+  await endTurn($)
+  expect(saved(world).job).toMatchObject({ line: 'rogue', tier: 1 })
+
+  // [c] lists the other lines, each a press away.
+  world.store['s:sess-b'] = stored({ gold: 5000 })
+  await ui.redraw()
+  await ui.press({ key: 'change' })
+  await ui.redraw()
+  expect(await ui.find({ key: '계열 암살' })).toBeUndefined()
+  await ui.press({ key: '계열 마법' })
+  expect(saved(world).job).toMatchObject({ line: 'magic', tier: 1 })
+  await ui.unmount()
+})
+
+test('/rpg 전직 and 계열 refuse in words', async ($, on) => {
+  mock.clock(on, { now: NOON })
+  engine(on, { save: stored({ exp: 300 }) })
+  await start($)
+  expect(await rpg($, '전직 근접')).toContain('Lv.10부터')
+  expect(await rpg($, '계열 마법')).toContain('1차 전직 뒤에')
+})
+
+test('the band has a menu button that opens and closes the pane, and says when 전직 is open', async ($, on) => {
+  mock.clock(on, { now: NOON })
+  const world = engine(on, { save: stored({ exp: 6802 }) })
+  await start($)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    expect((await ui.find({ type: 'Text', text: /Lv\./ }))?.text).toContain('[전직 가능]')
+    await ui.press({ key: 'menu' })
+    expect(world.panes).toEqual(['rpg'])
+    await ui.press({ key: 'menu' })
+    expect(world.panes).toEqual([])
+    await ui.unmount()
+  }
+  // Its row is still one: the field and the line take six.
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(rowsOf(await ui.drawn())).toBe(6)
+  await ui.unmount()
 })

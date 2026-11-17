@@ -99,7 +99,7 @@ export const fresh = (): Save => ({
 
 /** The hero's job; a save from before jobs is an 인턴. */
 export const jobOf = (save: Save): Job => save.job ?? { line: null, tier: 0, at: 0 }
-export const jobName = (job: Pick<Job, 'line' | 'tier'>) => (job.line && job.tier > 0 ? JOBS[job.line].names[job.tier - 1] : INTERN)
+export const jobName = (job: Pick<Job, 'line' | 'tier'>) => (job.line && JOBS[job.line].names[job.tier - 1]) || INTERN
 /** What the hero's job makes of one trait. */
 export const trait = (save: Save, key: keyof Trait) => {
   const { line, tier } = jobOf(save)

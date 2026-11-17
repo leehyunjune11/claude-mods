@@ -1,12 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { IdleRpgMeta as Meta, IdleRpgSave as Save, IdleRpgSkillId as SkillId } from '../types'
+import type { IdleRpgJobLine as JobLine, IdleRpgMeta as Meta, IdleRpgSave as Save, IdleRpgSkillId as SkillId } from '../types'
 import {
   BOSS_NAME,
+  EXAM_NAME,
   EXP_PER_USD,
   GACHA_COST,
   GEAR_MULT,
+  JOBS,
+  JOB_LINES,
   KILLS_PER_STAGE,
   MAX_SKILL,
   RARITY_NAMES,
@@ -17,9 +20,11 @@ import {
   SLOT_NAMES,
   TIER_LEVEL,
   apply,
+  applyJob,
   attack,
   autoAttack,
   autoMs,
+  changeLine,
   costExp,
   enhance,
   enhanceCost,
@@ -34,6 +39,7 @@ import {
   learn,
   levelInfo,
   levelOf,
+  lineChangeCost,
   mobIndex,
   parseSave,
   share,
@@ -55,6 +61,8 @@ const CATCH_UP_MS = 8 * 3_600_000
 const save = atom({ plugin: 'idle-rpg', key: 'save' } as const, fresh(), { shape: 'save-1' })
 const base = atom({ plugin: 'idle-rpg', key: 'base' } as const, fresh(), { shape: 'save-1' })
 const meta = atom({ plugin: 'idle-rpg', key: 'meta' } as const, { on: true } as Meta, { shape: 'meta-1' })
+/** The pane's own: whether [c] is picking a line, and the last press's answer. */
+const pane = atom({ plugin: 'idle-rpg', key: 'pane' } as const, { picking: false, note: '' })
 
 // --- The scene: 10 pixels tall, one cell to two pixels, the ground on the last pixel.
 
@@ -240,6 +248,14 @@ const bossWait = (x: Save) => {
   return need > 0 ? `보스 ${BOSS_NAME}은 공격력 ${amount(need)}부터 나와요` : ''
 }
 
+/** The level the next 전직 opens at, while none is pending; undefined past 3차 or mid-trial. */
+const nextTierLevel = (x: Save) => {
+  const { tier, trial } = jobOf(x)
+  return trial || tier >= 3 ? undefined : TIER_LEVEL[tier + 1]
+}
+/** Whether a 전직 can be applied for now. */
+const canApply = (x: Save) => levelOf(x.exp) >= (nextTierLevel(x) ?? Infinity)
+
 /** While a 전직 시험 waits on attack, what it asks for. */
 const examWait = (x: Save) => {
   const need = examNeed(x)
@@ -252,6 +268,26 @@ const SKILL_HELP: Record<SkillId, string> = {
   greed: '골드 +10%씩',
 }
 
+const TRAIT_TEXT: Record<JobLine, (x: Save) => string> = {
+  melee: x => `도구 호출 타격 ${trait(x, 'toolHit')}배`,
+  magic: x => `경험치 x${trait(x, 'exp')}`,
+  ranged: x => `자동 공격 ${trait(x, 'autoMs') / 1000}초마다`,
+  rogue: x => `치명타 +${trait(x, 'crit')}%p · 골드 x${trait(x, 'gold')}`,
+}
+
+/** The job, what it trains, and the way to the next. */
+const jobText = (x: Save) => {
+  const job = jobOf(x)
+  const parts = [job.line ? `${jobName(job)} (${JOBS[job.line].label} ${job.tier}차) · ${TRAIT_TEXT[job.line](x)}` : jobName(job)]
+  if (job.trial) {
+    const wait = examWait(x)
+    parts.push(`전직 시험 중 → ${jobName({ line: job.trial.line, tier: (job.tier + 1) as 1 })} · ${wait || `${EXAM_NAME}과 전투 중`}`)
+  } else if (nextTierLevel(x) !== undefined) {
+    parts.push(`${job.tier + 1}차 전직 Lv.${nextTierLevel(x)}부터${canApply(x) ? ' (지금 가능)' : ''}`)
+  }
+  return parts.join(' · ')
+}
+
 export const report = (x: Save) => {
   const { level, into, need } = levelInfo(x.exp)
   const gear = SLOTS.map(slot => {
@@ -259,7 +295,8 @@ export const report = (x: Save) => {
     return `${SLOT_NAMES[slot]} ${RARITY_NAMES[rarity]}${rarity > 0 ? `(${SLOT_EFFECTS[slot]} x${GEAR_MULT[slot][rarity]})` : ''}`
   })
   return [
-    `디버거 기사 Lv.${level} · 다음 레벨까지 경험치 ${amount(Math.ceil(need - into))}`,
+    `${jobName(jobOf(x))} Lv.${level} · 다음 레벨까지 경험치 ${amount(Math.ceil(need - into))}`,
+    `직업: ${jobText(x)}`,
     `스테이지 ${stageLabel(x)} · 상대: ${foe(x)}${bossWait(x) && ` · ${bossWait(x)}`}`,
     `골드 ${amount(x.gold)} · 공격력 ${amount(attack(x))} · 강화 +${x.enhance}`,
     `장비: ${gear.join(' · ')}`,
@@ -271,6 +308,8 @@ export const report = (x: Save) => {
     '  /rpg 강화 최대: 골드가 되는 만큼 강화',
     '  /rpg 뽑기: 무작위 장비 (일반 60% · 희귀 28% · 영웅 10% · 전설 2%)',
     ...SKILLS.map(id => `  /rpg 스킬 ${SKILL_NAMES[id]}: ${SKILL_HELP[id]}`),
+    '  /rpg 전직 [근접|마법|원거리|암살]: Lv.10·30·60부터 전직 시험 신청 (인턴은 계열을 골라요)',
+    `  /rpg 계열 <이름>: 같은 차수에서 계열 바꾸기 (다음 강화 20번 값, 지금 ${amount(lineChangeCost(x))}골드)`,
     '  /rpg 끄기 · /rpg 켜기: 띠 숨기기 · 다시 보이기 (꺼도 사냥은 계속돼요)',
   ].join('\n')
 }
@@ -290,14 +329,6 @@ let lastAt = 0
 let spare = 0 // elapsed time short of one attack
 let pace = 1500 // the save's last auto-attack interval: only says when there may be one to make
 let saving: Promise<unknown> = Promise.resolve()
-
-/** The level the next 전직 opens at, while none is pending; undefined past 3차 or mid-trial. */
-const nextTierLevel = (x: Save) => {
-  const { tier, trial } = jobOf(x)
-  return trial || tier >= 3 ? undefined : TIER_LEVEL[tier + 1]
-}
-/** Whether a 전직 can be applied for now. */
-const canApply = (x: Save) => levelOf(x.exp) >= (nextTierLevel(x) ?? Infinity)
 
 /**
  * What a move of this session's own made happen, a line per kind at most: a catch-up of hundreds
@@ -471,7 +502,11 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
   }
   const goldLeft = (x: Save) => `남은 골드 ${amount(x.gold)}.`
 
-  if (verb === '') return report(await read($, save))
+  if (verb === '') {
+    // The pane where it can be placed; the report either way.
+    await openPane($).catch(() => {})
+    return report(await read($, save))
+  }
   if (verb === '끄기' || verb === '켜기') return setOn($, verb === '켜기')
   if (verb === '강화') {
     const before = (await read($, save)).enhance
@@ -493,15 +528,50 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
     if (!id) return `스킬 이름을 적어 주세요: ${SKILLS.map(s => SKILL_NAMES[s]).join(', ')}`
     return settle(await buy($, x => learn(x, id)), (x, note) => `${note} 습득! 남은 포인트 ${skillPoints(x)}.`)
   }
+  if (verb === '전직' || verb === '계열') {
+    const now = await $.clock.now()
+    const move = verb === '전직' ? applyJob : changeLine
+    return settle(await buy($, x => move(x, arg, now)), (x, note) => `${note} ${goldLeft(x)}`)
+  }
   return `모르는 명령이에요: ${verb}\n/rpg 만 입력하면 상태와 명령 목록을 볼 수 있어요.`
+}
+
+/** Advance, read the other rows in, then the command: what /rpg and every pane press go through. */
+const run = async ($: EngineInterface, args: string) => {
+  await advance($)
+  // Gold another session spent or earned since the last save counts before anything is bought.
+  await sync($)
+  return command($, args)
+}
+
+// --- The pane: the same commands, a key each.
+
+const PANE = 'rpg'
+const LINE_KEYS: Record<JobLine, string> = { melee: 'q', magic: 'w', ranged: 'r', rogue: 'a' }
+
+const openPane = async ($: EngineInterface) => {
+  await update($, pane, p => ({ ...p, picking: false }))
+  return $.ui.open({ id: PANE, title: 'RPG', focus: true, closeOnEscape: true })
+}
+
+const togglePane = async ($: EngineInterface) => {
+  if ((await $.ui.panes()).some(p => p.id === PANE)) return $.ui.close({ id: PANE })
+  await openPane($)
+}
+
+/** A pane key: the command it stands for, its answer kept under the buttons. */
+const press = async ($: EngineInterface, args: string) => {
+  const note = await run($, args)
+  await update($, pane, () => ({ picking: false, note }))
+  $.ui.invalidate('ui.render')
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'rpg',
-      description: '방치형 RPG: 상태 보기, 강화, 뽑기, 스킬',
-      argumentHint: '[강화 [최대] | 뽑기 | 스킬 <이름> | 끄기 | 켜기]',
+      description: '방치형 RPG: 상태·메뉴 보기, 강화, 뽑기, 스킬, 전직',
+      argumentHint: '[강화 [최대] | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 끄기 | 켜기]',
     })
     const stored = await $.store.get('on')
     await update($, meta, m => ({ ...m, on: stored !== false }))
@@ -526,11 +596,63 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'rpg' }, async ($, e) => {
-    await advance($)
-    // Gold another session spent or earned since the last save counts before anything is bought.
-    await sync($)
-    return { text: await command($, e.args) }
+  on('command.run', { command: 'rpg' }, async ($, e) => ({ text: await run($, e.args) }))
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const x = await read($, save)
+    const { picking, note } = await read($, pane)
+    const job = jobOf(x)
+    const key = (hotkey: string, label: string, args: string) => (
+      <Button key={args} plain hotkey={hotkey} label={label} onPress={() => press($, args)} />
+    )
+    const lines = (names: (line: JobLine) => string, except?: JobLine | null) =>
+      JOB_LINES.filter(line => line !== except).map(line => key(LINE_KEYS[line], `${JOBS[line].label} ${names(line)}`, `${picking ? '계열' : '전직'} ${JOBS[line].label}`))
+    const jobRow = () => {
+      if (picking && job.line) {
+        return [
+          <Text key="label">계열 고르기 ({amount(lineChangeCost(x))}골드):</Text>,
+          ...lines(line => jobName({ line, tier: job.tier }), job.line),
+          <Button key="cancel" plain hotkey="x" label="취소" onPress={() => update($, pane, p => ({ ...p, picking: false }))} />,
+        ]
+      }
+      if (job.trial) return [<Text key="label">전직 시험 중 → {jobName({ line: job.trial.line, tier: (job.tier + 1) as 1 })} · {examWait(x) || `${EXAM_NAME}과 전투 중`}</Text>]
+      const change = job.line && (
+        <Button key="change" plain hotkey="c" label="계열 변경" onPress={() => update($, pane, p => ({ ...p, picking: true }))} />
+      )
+      if (job.tier === 0) return [<Text key="label">전직 (Lv.{nextTierLevel(x)}부터):</Text>, ...lines(line => jobName({ line, tier: 1 }))]
+      if (job.tier >= 3) return [<Text key="label">최종 전직 완료</Text>, change]
+      return [key('j', `${job.tier + 1}차 전직 (Lv.${nextTierLevel(x)}부터)`, '전직'), change]
+    }
+    return (
+      <Box flexDirection="column" borderStyle="round" paddingX={1}>
+        <Box justifyContent="space-between">
+          <Text bold color={SCENE.crit}>
+            ⚔ {jobName(job)} Lv.{levelOf(x.exp)}
+          </Text>
+          <Text>스테이지 {stageLabel(x)}</Text>
+        </Box>
+        <Text>
+          골드 {amount(x.gold)} · 공격력 {amount(attack(x))} · 강화 +{x.enhance}
+          {canApply(x) && <Text color={SCENE.crit}> · 전직 가능</Text>}
+        </Text>
+        <Text>장비: {SLOTS.map(slot => `${SLOT_NAMES[slot]} ${RARITY_NAMES[x.gear[slot]]}`).join(' · ')}</Text>
+        <Box columnGap={2} flexWrap="wrap">
+          {key('e', `강화 (${amount(enhanceCost(x))}골드)`, '강화')}
+          {key('m', '강화 최대', '강화 최대')}
+          {key('g', `뽑기 (${GACHA_COST})`, '뽑기')}
+        </Box>
+        <Box columnGap={2} flexWrap="wrap">
+          <Text>스킬 (포인트 {skillPoints(x)}):</Text>
+          {SKILLS.map((id, i) => key(String(i + 1), `${SKILL_NAMES[id]} ${x.skills[id]}/${MAX_SKILL}`, `스킬 ${SKILL_NAMES[id]}`))}
+        </Box>
+        <Box columnGap={2} flexWrap="wrap">
+          {jobRow()}
+        </Box>
+        <Text dimColor>Esc 닫기</Text>
+        {note !== '' && <Text dimColor>{note}</Text>}
+      </Box>
+    )
   })
 
   on('session.measure', async ($, e, next) => {
@@ -587,12 +709,21 @@ export const register: Register = on => {
     }
     const x = await read($, save)
     const { level } = levelInfo(x.exp)
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    // A row of one: the menu first, so a narrow band cuts the status and keeps the button.
     const line = (
-      <Text wrap="truncate-end">
+      <Box columnGap={1}>
+        <Button key="menu" label="메뉴" onPress={() => togglePane($)} />
+        <Text wrap="truncate-end">
         <Text bold color={SCENE.crit}>
           Lv.{level}
         </Text>
+        {canApply(x) && (
+          <Text bold color={SCENE.crit}>
+            {' '}
+            [전직 가능]
+          </Text>
+        )}
         <Text color="#5fd38a"> {expBar(x)}</Text>
         <Text>
           {'  '}스테이지 {stageLabel(x)}
@@ -606,6 +737,7 @@ export const register: Register = on => {
           {examWait(x) && ` · ${examWait(x)}`}
         </Text>
       </Text>
+      </Box>
     )
     // Another surface's drawing says nothing about the terminal's timer.
     if (e.surface !== 'terminal') return <Box flexDirection="column">{line}</Box>

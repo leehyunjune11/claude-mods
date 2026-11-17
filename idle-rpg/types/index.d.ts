@@ -62,6 +62,8 @@ declare module 'claude-code' {
       /** Every other session's share joined, as last read from the store. */
       base: Shaped<IdleRpgSave>
       meta: Shaped<IdleRpgMeta>
+      /** The /rpg pane's own: whether [c] is picking a line, and the last press's answer. */
+      pane: { picking: boolean; note: string }
     }
   }
 }
