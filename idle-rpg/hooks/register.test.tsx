@@ -745,3 +745,16 @@ test('every monster in every stage color, both frames, draws nothing near white 
     }
   }
 })
+
+test('the hills slide along as a new monster walks in, and the day clouds drift with time', () => {
+  const hill = hexOf(SCENE.hill)
+  const sky = (kills: number) => [...paintScene(newScene(), { kills, boss: false, left: 1 }, 72)].map(c => c === hill)
+  expect(sky(1)).not.toEqual(sky(0))
+  const cloud = hexOf(DAY_SCENE.star)
+  const at = (t: number) => {
+    const scene = newScene()
+    scene.t = t
+    return [...paintScene(scene, { kills: 0, boss: false, left: 1 }, 72, 'light')].map(c => c === cloud)
+  }
+  expect(at(240)).not.toEqual(at(0))
+})

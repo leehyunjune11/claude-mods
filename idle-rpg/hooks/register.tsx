@@ -199,17 +199,29 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
     })
   }
 
-  for (let x = 0; x < cols; x++) {
-    if (scheme === 'dark' && (x * 7919) % 11 === 0) px(x, (x * 31) % 6, COLOR.star)
-    px(x, GROUND, COLOR.ground)
-  }
-  // The day's clouds: a puff every 23 columns, a row lower every other one.
+  for (let x = 0; x < cols; x++) if (scheme === 'dark' && (x * 7919) % 11 === 0) px(x, (x * 31) % 6, COLOR.star)
+  // The day's clouds: a puff every 23 columns, a row lower every other one, drifting left.
   if (scheme === 'light') {
-    for (let x0 = 7, n = 0; x0 < cols; x0 += 23, n++) {
+    const drift = Math.floor(s.t / 24)
+    for (let n = Math.floor(drift / 23); 23 * n - drift < cols; n++) {
+      const x0 = 7 + 23 * n - drift
       const y = n % 2 === 0 ? 1 : 0
       for (let i = 1; i < 4; i++) px(x0 + i, y, COLOR.star)
       for (let i = 0; i < 6; i++) px(x0 + i, y + 1, COLOR.star)
     }
+  }
+  // Far hills and a tree every 17 columns, slid along by the kills: the hero walks on to each monster.
+  const walk = Math.round((view.kills - s.enter / ENTER) * 6)
+  for (let x = 0; x < cols; x++) {
+    const u = x + walk
+    const rise = 1 + Math.round(1.5 + 1.5 * Math.sin(u / 6))
+    for (let y = GROUND - rise; y < GROUND; y++) px(x, y, COLOR.hill)
+    if (((u % 17) + 17) % 17 === 0) {
+      for (let y = GROUND - 6; y < GROUND; y++) px(x, y, COLOR.tree)
+      for (const y of [GROUND - 5, GROUND - 4, GROUND - 3]) for (const i of [-1, 1]) px(x + i, y, COLOR.tree)
+      for (const i of [-2, 2]) px(x + i, GROUND - 4, COLOR.tree)
+    }
+    px(x, GROUND, COLOR.ground)
   }
 
   const beat = (s.t >> 3) & 1

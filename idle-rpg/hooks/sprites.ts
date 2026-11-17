@@ -43,6 +43,8 @@ export const SCENE = {
   sky: '#0d1220',
   star: '#2c3654',
   ground: '#3b4158',
+  hill: '#1c2540', // far hills
+  tree: '#18304a', // far trees
   hp: '#e8483f',
   hpLost: '#3a1512',
   flash: '#ffffff',
@@ -59,6 +61,8 @@ export const DAY_SCENE: typeof SCENE = {
   sky: '#9fd4f5',
   star: '#f4f9fd', // clouds
   ground: '#7fb35a',
+  hill: '#8fc6b0',
+  tree: '#5aa070',
   hp: '#d62f26',
   hpLost: '#f3cbc6',
   flash: '#1d2333',
