@@ -80,7 +80,11 @@ export type Rng = () => number
 /** `advanced`: the kill moved the hero on; one made while the boss waits does not. */
 /** `exam`: the hit fell on the 전직 시험관; present only then. */
 export type Hit = { dmg: number; crit: boolean; killed: boolean; boss: boolean; advanced: boolean; exam?: true }
-export type GameEvent = { type: 'tick'; ms: number } | { type: 'tool' } | { type: 'exp'; exp: number }
+export type GameEvent =
+  | { type: 'tick'; ms: number }
+  | { type: 'tool' }
+  | { type: 'exp'; exp: number }
+  | { type: 'reward'; exp: number; gold: number }
 export type Purchase = { save: Save; note: string } | { refused: string }
 
 const perSlot = <T>(f: (slot: Slot) => T): Record<Slot, T> => ({ weapon: f('weapon'), armor: f('armor'), ring: f('ring') })
@@ -162,6 +166,15 @@ export const foeOf = (save: Save) => {
 }
 export const skillPoints = (save: Save) =>
   Math.max(0, levelOf(save.exp) - 1 - SKILLS.reduce((sum, id) => sum + save.skills[id], 0))
+/**
+ * What a finished to-do worth `xp` pays: half a percent of this level's exp per xp, and half a plain
+ * monster's gold of this stage per xp; the magic line's exp and the rogue's gold, and the armor, count.
+ */
+export const questReward = (save: Save, xp: number) => ({
+  exp: Math.round(expNeed(levelOf(save.exp)) * 0.005 * xp * trait(save, 'exp')),
+  gold: Math.round(MOB_GOLD * stageReward(save) * (xp / 2) * trait(save, 'gold') * gearMult(save, 'armor')),
+})
+
 const costAt = (enhance: number) => Math.round(50 * ENHANCE_COST ** enhance)
 export const enhanceCost = (save: Save) => costAt(save.enhance)
 /** What a 계열 변경 costs: the next LINE_CHANGE_ENHANCES 강화 together. */
@@ -214,6 +227,7 @@ export const autoAttack = (save: Save, ms: number, rng: Rng, now = 0) => {
 /** The one way the game moves: time passing, a tool call, money spent. `now` stamps a 전직. */
 export const apply = (save: Save, event: GameEvent, rng: Rng, now = 0): { save: Save; hits: Hit[] } => {
   if (event.type === 'exp') return { save: { ...save, exp: save.exp + event.exp }, hits: [] }
+  if (event.type === 'reward') return { save: { ...save, exp: save.exp + event.exp, gold: save.gold + event.gold }, hits: [] }
   if (event.type === 'tick') {
     const { save: s, hits } = autoAttack(save, event.ms, rng, now)
     return { save: s, hits }

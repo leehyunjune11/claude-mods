@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import type { IdleRpgSave as Save } from '../types'
-import { apply, fresh, join, levelOf, parseSave, stageOf } from './game'
+import { apply, fresh, join, levelOf, parseSave, questReward, stageOf } from './game'
 import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene } from './register'
 import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, SCENE } from './sprites'
 
@@ -28,9 +28,16 @@ const engine = (on: On, store: Record<string, unknown> = {}) => {
     panes: [] as string[],
     /** What `defaults read -g AppleInterfaceStyle` prints; undefined: the run fails. */
     appearance: undefined as string | undefined,
+    /** Files by path; a path not here is missing. */
+    files: {} as Record<string, string>,
   }
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/test' : undefined }))
+  on('fs.read', (_, e) => {
+    const text = world.files[e.path]
+    return text === undefined ? { deny: `ENOENT: ${e.path}` } : { value: text }
+  })
   on('process.run', () => {
-    if (world.appearance === undefined) throw new Error('ENOENT: defaults')
+    if (world.appearance === undefined) return { deny: 'ENOENT: defaults' }
     const dark = world.appearance === 'Dark'
     return { value: { exitCode: dark ? 0 : 1, stdout: dark ? 'Dark\n' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
@@ -664,4 +671,51 @@ test('/rpg 테마 picks the scheme, the store keeps it, and 시스템 follows ma
   await rpg($, '테마 라이트')
   await rpg($, '테마 시스템')
   expect(await field()).toBe(hexOf(SCENE.sky))
+})
+
+const TASKS = '/home/test/.quest/tasks.json'
+const tasks = (...list: { id: string; xp?: number; done?: boolean }[]) =>
+  JSON.stringify({ date: '2026-11-17', tasks: list.map(t => ({ t: `할 일 ${t.id}`, ...t })) })
+
+test('a finished to-do pays once, for good, from the start, a turn end or the timer', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on, { save: stored({ exp: 300, kills: 25 }) })
+  world.files[TASKS] = tasks({ id: 'deck', xp: 150, done: true }, { id: 'mail', done: true }, { id: 'call', xp: 40 })
+  await start($)
+
+  // Lv.2 at stage 3: deck 150 xp, mail the default 10.
+  const deck = questReward(stored({ exp: 300, kills: 25 }), 150)
+  const mail = questReward(stored({ exp: 300, kills: 25 }), 10)
+  expect(deck).toEqual({ exp: Math.round(366 * 0.005 * 150), gold: Math.round(5 * 1.12 ** 2 * 75) })
+  expect(saved(world)).toMatchObject({ exp: 300 + deck.exp + mail.exp, gold: deck.gold + mail.gold })
+  expect(world.store['quests-paid']).toEqual(['deck', 'mail'])
+  expect(world.toasts.filter(t => t.startsWith('퀘스트'))).toEqual([`퀘스트 2개 완료 보상: 경험치 +${deck.exp + mail.exp} · 골드 +${deck.gold + mail.gold}`])
+
+  // Read again: nothing new. Unchecked, deck keeps what it paid; call, checked, pays alone.
+  await endTurn($)
+  const before = saved(world)
+  world.files[TASKS] = tasks({ id: 'deck', xp: 150 }, { id: 'mail', done: true }, { id: 'call', xp: 40, done: true })
+  await clock.advance(30_000) // the timer, no turn end, no band
+  const after = saved(world)
+  expect(after.gold - before.gold).toBe(questReward(before, 40).gold)
+  expect(world.store['quests-paid']).toEqual(['deck', 'mail', 'call'])
+  await endTurn($)
+  expect(world.store['quests-paid']).toEqual(['deck', 'mail', 'call'])
+  expect(world.toasts.filter(t => t.startsWith('퀘스트')).length).toBe(2)
+})
+
+test('a missing or broken quest file pays nothing and says nothing', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on)
+  await start($)
+  await endTurn($)
+  world.files[TASKS] = '{"date": "2026-11-17", "tasks": [{"id": "x", "done": tr'
+  await clock.advance(30_000)
+  await endTurn($)
+  world.files[TASKS] = JSON.stringify({ tasks: 'none' })
+  await endTurn($)
+  expect(world.store['quests-paid']).toBeUndefined()
+  expect(world.toasts).toEqual([])
+  // What it has is the half minute of hunting, and nothing more.
+  expect(saved(world)).toEqual(apply(fresh(), { type: 'tick', ms: 30_000 }, () => 0.99).save)
 })

@@ -42,6 +42,7 @@ import {
   lineChangeCost,
   mobIndex,
   parseSave,
+  questReward,
   share,
   skillPoints,
   stageOf,
@@ -610,6 +611,58 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
   return `모르는 명령이에요: ${verb}\n/rpg 만 입력하면 상태와 명령 목록을 볼 수 있어요.`
 }
 
+// --- Quest rewards: the quest board's finished to-dos, read from ~/.quest/tasks.json.
+
+const PAID = 'quests-paid' // every to-do id ever paid, in the store beside the rows
+const QUEST_MS = 30_000
+const QUEST_XP = 10 // a to-do with no xp of its own
+let questing: Promise<unknown> = Promise.resolve()
+let questTimer: Timer | undefined
+
+/** The finished to-dos the file lists, each id once; none when it is missing or not JSON. */
+const doneQuests = (text: string) => {
+  try {
+    const { tasks } = JSON.parse(text) as { tasks?: unknown }
+    const done = new Map<string, number>()
+    for (const t of Array.isArray(tasks) ? tasks : []) {
+      if (typeof t !== 'object' || t === null || t.done !== true || typeof t.id !== 'string') continue
+      done.set(t.id, typeof t.xp === 'number' && Number.isFinite(t.xp) && t.xp > 0 ? t.xp : QUEST_XP)
+    }
+    return done
+  } catch {
+    return new Map<string, number>()
+  }
+}
+
+/**
+ * Pays each finished to-do never paid before, once and for good: unchecking one takes nothing back.
+ * The ids are written before the pay, so a failed write pays nothing rather than twice.
+ */
+const readQuests = ($: EngineInterface) => {
+  const run = async () => {
+    const home = await $.env.get('HOME')
+    if (!home) return
+    const done = doneQuests(await $.fs.read(`${home}/.quest/tasks.json`).catch(() => ''))
+    if (done.size === 0) return
+    // ponytail: two sessions reading in the same instant both find an id unpaid and both pay it;
+    // the window is one store round trip. A lock in the store would close it if it ever matters.
+    const kept = await $.store.get(PAID)
+    const paid = new Set(Array.isArray(kept) ? kept.filter((id): id is string => typeof id === 'string') : [])
+    const owed = [...done].filter(([id]) => !paid.has(id))
+    if (owed.length === 0) return
+    await $.store.set(PAID, [...paid, ...owed.map(([id]) => id)])
+    const x = await read($, save)
+    const exp = owed.reduce((sum, [, xp]) => sum + questReward(x, xp).exp, 0)
+    const gold = owed.reduce((sum, [, xp]) => sum + questReward(x, xp).gold, 0)
+    await play($, { type: 'reward', exp, gold })
+    $.ui.toast(`퀘스트 ${owed.length}개 완료 보상: 경험치 +${amount(exp)} · 골드 +${amount(gold)}`)
+    await sync($, false)
+  }
+  // The start, each turn's end and the timer all come here: one read at a time.
+  questing = questing.then(run, run)
+  return questing.catch(() => {})
+}
+
 /** Advance, read the other rows in, then the command: what /rpg and every pane press go through. */
 const run = async ($: EngineInterface, args: string) => {
   await advance($)
@@ -661,6 +714,12 @@ export const register: Register = on => {
     await sync($)
     // A band that stayed up through a reload needs drawing to start its timer again.
     $.ui.invalidate('ui.render')
+    await readQuests($)
+    // Its own timer, drawn or not: a to-do checked off between turns pays within half a minute.
+    questTimer?.cancel()
+    questTimer = $.clock.every(QUEST_MS, () => {
+      void readQuests($)
+    })
     return next(e)
   })
 
@@ -762,7 +821,10 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     await advance($)
     // A save that fails costs the turn nothing: the next one writes the same row.
-    if (e.agentId === undefined) await sync($, false).catch(() => {})
+    if (e.agentId === undefined) {
+      await sync($, false).catch(() => {})
+      await readQuests($)
+    }
     return next(e)
   })
 

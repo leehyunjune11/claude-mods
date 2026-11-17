@@ -21,6 +21,7 @@ import {
   learn,
   levelOf,
   lineChangeCost,
+  questReward,
   parseSave,
   share,
   stageOf,
@@ -448,4 +449,12 @@ test('13 looks: the 인턴 and each line at 1차 to 3차, two standing frames an
   expect(new Set(EXAMINER.map(row => row.length)).size).toBe(1)
   for (const c of EXAMINER.join('')) expect(c === '.' || PALETTE[c] !== undefined).toBe(true)
   for (const c of Object.keys(DAY_PALETTE)) expect(PALETTE[c]).toBeDefined()
+})
+
+test('a quest pays by its xp, the level and the stage, the magic line more exp and the rogue more gold', () => {
+  // Lv.1 needs 300 exp: 10 xp is 15 exp. Stage 1's plain monster pays 5 gold: 10 xp is 25.
+  expect(questReward(fresh(), 10)).toEqual({ exp: 15, gold: 25 })
+  expect(questReward(as('magic', 3), 10)).toEqual({ exp: 26, gold: 25 }) // 15 x 1.7
+  expect(questReward(as('rogue', 3, { gear: { weapon: 0, armor: 4, ring: 0 } }), 10)).toEqual({ exp: 15, gold: 94 }) // 25 x 1.5 x 2.5
+  expect(apply(fresh(), { type: 'reward', exp: 15, gold: 25 }, never).save).toMatchObject({ exp: 15, gold: 25 })
 })
