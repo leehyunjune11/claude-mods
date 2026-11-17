@@ -1,4 +1,6 @@
 import type {
+  IdleRpgJob as Job,
+  IdleRpgJobLine as JobLine,
   IdleRpgRarity as Rarity,
   IdleRpgSave as Save,
   IdleRpgSkillId as SkillId,
@@ -32,6 +34,7 @@ const BOSS_REWARD = 5
 const BOSS_TRIES = 40
 
 export const SLOTS = ['weapon', 'armor', 'ring'] as const
+export const JOB_LINES = ['melee', 'magic', 'ranged', 'rogue'] as const
 export const SKILLS = ['flurry', 'crit', 'greed'] as const
 export const SLOT_NAMES: Record<Slot, string> = { weapon: '무기', armor: '갑옷', ring: '반지' }
 export const SLOT_EFFECTS: Record<Slot, string> = { weapon: '공격력', armor: '골드', ring: '경험치' }
@@ -68,6 +71,9 @@ export const fresh = (): Save => ({
   skills: perSkill(() => 0),
   dmg: 0,
 })
+
+/** The hero's job; a save from before jobs is an 인턴. */
+export const jobOf = (save: Save): Job => save.job ?? { line: null, tier: 0, at: 0 }
 
 const expNeed = (level: number) => Math.round(300 * 1.22 ** (level - 1))
 
@@ -202,9 +208,19 @@ export const learn = (save: Save, id: SkillId): Purchase => {
  * earned), beside its own position and gear.
  */
 
-/** Two shares as one: counters add, gear keeps the better piece, the position is the furthest. */
+/** The job two rows hold, as one: the higher tier, then the later change. Never field by field. */
+const joinJob = (a?: Job, b?: Job) => {
+  if (!a || !b) return a ?? b
+  return b.tier > a.tier || (b.tier === a.tier && b.at > a.at) ? b : a
+}
+
+/**
+ * Two shares as one: counters add, gear keeps the better piece, the position is the furthest, the
+ * job the higher.
+ */
 export const join = (a: Save, b: Save): Save => {
   const far = b.kills > a.kills || (b.kills === a.kills && b.dmg > a.dmg) ? b : a
+  const job = joinJob(a.job, b.job)
   return {
     v: 1,
     exp: a.exp + b.exp,
@@ -214,6 +230,7 @@ export const join = (a: Save, b: Save): Save => {
     gear: perSlot(slot => Math.max(a.gear[slot], b.gear[slot]) as Rarity),
     skills: perSkill(id => a.skills[id] + b.skills[id]),
     dmg: far.dmg,
+    ...(job && { job }),
   }
 }
 
@@ -243,7 +260,20 @@ const isCount = (x: unknown, max = Infinity): x is number => typeof x === 'numbe
 const isWhole = (x: unknown, max = Infinity): x is number => isCount(x, max) && Number.isInteger(x)
 const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null
 
-/** What `$.store.get` returned, as a share; anything else counts for nothing. */
+const isLine = (x: unknown): x is JobLine => JOB_LINES.includes(x as JobLine)
+
+/** A stored job, or undefined when it is not one. */
+const parseJob = (raw: unknown): Job | undefined => {
+  if (!isRecord(raw)) return undefined
+  const { line, tier, at, trial } = raw
+  if (!isWhole(tier, 3) || !isCount(at) || (tier === 0 ? line !== null : !isLine(line))) return undefined
+  if (trial === undefined) return { line, tier, at } as Job
+  if (!isRecord(trial) || !isLine(trial.line) || !isCount(trial.hp) || trial.hp === 0 || tier === 3) return undefined
+  if (tier > 0 && trial.line !== line) return undefined
+  return { line, tier, at, trial: { line: trial.line, hp: trial.hp } } as Job
+}
+
+/** What `$.store.get` returned, as a share; anything else counts for nothing. A bad job is dropped alone. */
 export const parseSave = (raw: unknown): Save => {
   if (!isRecord(raw) || raw.v !== 1) return fresh()
   const { exp, gold, kills, enhance, dmg, gear, skills } = raw
@@ -252,5 +282,16 @@ export const parseSave = (raw: unknown): Save => {
   if (!isWhole(kills) || !isShare(enhance) || !isCount(dmg) || !isRecord(gear) || !isRecord(skills)) return fresh()
   if (!SLOTS.every(slot => isWhole(gear[slot], 4)) || !SKILLS.every(id => isShare(skills[id]))) return fresh()
   // A save from before exp was whole may hold a fraction.
-  return { v: 1, exp: Math.round(exp), gold: Math.round(gold), kills, enhance, dmg, gear: perSlot(slot => gear[slot] as Rarity), skills: perSkill(id => skills[id] as number) }
+  const job = parseJob(raw.job)
+  return {
+    v: 1,
+    exp: Math.round(exp),
+    gold: Math.round(gold),
+    kills,
+    enhance,
+    dmg,
+    gear: perSlot(slot => gear[slot] as Rarity),
+    skills: perSkill(id => skills[id] as number),
+    ...(job && { job }),
+  }
 }

@@ -12,6 +12,7 @@ import {
   fresh,
   gacha,
   isBoss,
+  jobOf,
   join,
   learn,
   levelOf,
@@ -223,4 +224,81 @@ test('every sprite is a grid of palette colors that fits the scene', () => {
   }
   expect(MOBS.length).toBe(MOB_NAMES.length)
   for (const glyph of Object.values(FONT)) expect(glyph.map(row => row.length)).toEqual([3, 3, 3, 3, 3])
+})
+
+// The live store the day jobs came in (~/.claude/backups/idle-rpg-store.bak-20261117-pre-job.json):
+// the old every-session save, then a row per session, none of them with a job.
+const LIVE_STORE: unknown[] = [
+  {"v":1,"exp":5185.1945,"gold":3722,"kills":179,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":96},
+  {"v":1,"exp":65510,"gold":53909,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":720},
+  {"v":1,"exp":2672,"gold":1296,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":374},
+  {"v":1,"exp":10,"gold":0,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":578},
+  {"v":1,"exp":84,"gold":54,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":578},
+  {"v":1,"exp":49273,"gold":38448,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":3852,"gold":810,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":578},
+  {"v":1,"exp":9,"gold":0,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":1605,"gold":594,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":578},
+  {"v":1,"exp":34394,"gold":17658,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":0,"gold":0,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":0,"gold":0,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":65,"gold":54,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":0,"gold":0,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":65,"gold":54,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":65,"gold":54,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":0,"gold":0,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":12997,"gold":8802,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":10411,"gold":7290,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":8883,"gold":6696,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":7669,"gold":5454,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+  {"v":1,"exp":76,"gold":54,"kills":219,"enhance":0,"gear":{"weapon":0,"armor":0,"ring":0},"skills":{"flurry":0,"crit":0,"greed":0},"dmg":768},
+]
+
+test('the live store from before jobs reads whole, as an 인턴', () => {
+  const rows = LIVE_STORE.map(parseSave)
+  expect(rows.every(row => row.job === undefined)).toBe(true)
+  const all = total(rows.reduce(join, fresh()), fresh())
+  expect(all).toMatchObject({ exp: 202825, gold: 144949, kills: 219, enhance: 0, dmg: 768 })
+  expect(levelOf(all.exp)).toBe(26)
+  expect(jobOf(all)).toEqual({ line: null, tier: 0, at: 0 })
+  // A row written after the change, with a job, joins in without moving anything else.
+  const knight = { ...fresh(), job: { line: 'melee', tier: 1, at: 5 } } as const
+  expect(total(rows.reduce(join, fresh()), knight)).toMatchObject({ gold: 144949, kills: 219, job: knight.job })
+})
+
+test('rows join the job whole: the higher tier, then the later change', () => {
+  const job = (tier: 0 | 1 | 2 | 3, at: number, line: 'melee' | 'magic' | null = tier ? 'melee' : null) => ({ ...fresh(), job: { line, tier, at } })
+  expect(join(job(1, 100), job(2, 5)).job).toEqual({ line: 'melee', tier: 2, at: 5 })
+  expect(join(job(2, 5), job(1, 100)).job).toEqual({ line: 'melee', tier: 2, at: 5 })
+  expect(join(job(1, 5), job(1, 9, 'magic')).job).toEqual({ line: 'magic', tier: 1, at: 9 })
+  // A trial pending in one row comes with its job, never pasted onto the other's.
+  const trying = { ...fresh(), job: { line: null, tier: 0, at: 7, trial: { line: 'rogue', hp: 600 } } } as const
+  expect(join(job(0, 3), trying).job).toEqual(trying.job)
+  expect(join(trying, job(1, 1)).job).toEqual({ line: 'melee', tier: 1, at: 1 })
+  expect(join(fresh(), trying).job).toEqual(trying.job)
+  expect('job' in join(fresh(), fresh())).toBe(false)
+  // share and total carry it as they carry the position.
+  expect(share(trying, fresh()).job).toEqual(trying.job)
+})
+
+test('parseSave keeps a good job and drops a bad one alone', () => {
+  const row = { ...fresh(), gold: 40, kills: 13 }
+  const good = [
+    { line: null, tier: 0, at: 0 },
+    { line: 'magic', tier: 2, at: 99 },
+    { line: null, tier: 0, at: 1, trial: { line: 'ranged', hp: 600 } },
+    { line: 'rogue', tier: 1, at: 1, trial: { line: 'rogue', hp: 600 } },
+  ]
+  for (const job of good) expect(parseSave({ ...row, job })).toEqual({ ...row, job } as Save)
+  const bad: unknown[] = [
+    'knight',
+    { line: 'melee', tier: 0, at: 0 },
+    { line: null, tier: 1, at: 0 },
+    { line: 'bard', tier: 1, at: 0 },
+    { line: 'melee', tier: 4, at: 0 },
+    { line: 'melee', tier: 1 },
+    { line: 'melee', tier: 1, at: 0, trial: { line: 'magic', hp: 600 } },
+    { line: 'melee', tier: 3, at: 0, trial: { line: 'melee', hp: 600 } },
+    { line: null, tier: 0, at: 0, trial: { line: 'melee', hp: -1 } },
+  ]
+  for (const job of bad) expect(parseSave({ ...row, job })).toEqual(row)
 })

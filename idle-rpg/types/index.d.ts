@@ -5,6 +5,21 @@ export type IdleRpgRarity = 0 | 1 | 2 | 3 | 4
 
 export type IdleRpgSkillId = 'flurry' | 'crit' | 'greed'
 
+export type IdleRpgJobLine = 'melee' | 'magic' | 'ranged' | 'rogue'
+
+/** 0 인턴, then 1차 / 2차 / 3차 전직. */
+export type IdleRpgTier = 0 | 1 | 2 | 3
+
+export type IdleRpgJob = {
+  /** null iff tier 0 (인턴). */
+  line: IdleRpgJobLine | null
+  tier: IdleRpgTier
+  /** A pending 전직 시험: the examiner's hp, fixed when applied. Absent = none pending. */
+  trial?: { line: IdleRpgJobLine; hp: number }
+  /** When line, tier or trial last changed (ms); breaks ties between rows. */
+  at: number
+}
+
 /**
  * What the game is played on, and each session's row in the store (`s:<session id>`): there exp,
  * gold, 강화 and skills are that session's own share, which add up across rows. Level and stage are
@@ -24,6 +39,11 @@ export type IdleRpgSave = {
   skills: Record<IdleRpgSkillId, number>
   /** Damage already dealt to the current monster. */
   dmg: number
+  /**
+   * The hero's job, absolute like the position: rows join it whole, the higher tier and then the
+   * later change winning. Absent on saves from before jobs, and read as 인턴.
+   */
+  job?: IdleRpgJob
 }
 
 export type IdleRpgMeta = {
