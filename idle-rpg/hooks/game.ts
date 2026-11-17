@@ -5,14 +5,13 @@ import type {
   IdleRpgSave as Save,
   IdleRpgSkillId as SkillId,
   IdleRpgSlot as Slot,
+  IdleRpgTier as Tier,
 } from '../types'
 
-export const AUTO_MS = 1500
 export const KILLS_PER_STAGE = 10
 export const MAX_SKILL = 5
 export const GACHA_COST = 300
 const GACHA_REFUND = 90
-const TOOL_HIT = 3
 const CRIT_HIT = 2.5
 const CRIT_CHANCE = 0.05
 const FLURRY_CHANCE = 0.15
@@ -32,6 +31,10 @@ const BOSS_HP = 8
 const BOSS_REWARD = 5
 /** The boss steps out once this many plain hits would fell it. */
 const BOSS_TRIES = 40
+/** The 전직 시험관 has this many times the stage boss's hp, fixed when the hero applies. */
+const EXAM_HP = 3
+/** A 계열 변경 costs what the next this many 강화 would. */
+const LINE_CHANGE_ENHANCES = 20
 
 export const SLOTS = ['weapon', 'armor', 'ring'] as const
 export const JOB_LINES = ['melee', 'magic', 'ranged', 'rogue'] as const
@@ -42,6 +45,27 @@ export const RARITY_NAMES = ['없음', '일반', '희귀', '영웅', '전설'] a
 export const SKILL_NAMES: Record<SkillId, string> = { flurry: '연속베기', crit: '급소찌르기', greed: '황금손' }
 export const MOB_NAMES = ['세미콜론 벌레', '널 유령', '무한루프 뱀', '메모리 누수 방울'] as const
 export const BOSS_NAME = '레거시 골렘'
+export const EXAM_NAME = '전직 시험관'
+export const INTERN = '인턴'
+
+/** The level each tier opens at, 1차 to 3차; and what every line's tier does to attack. */
+export const TIER_LEVEL = [0, 10, 30, 60] as const
+const TIER_ATTACK = [1, 1.3, 1.7, 2.5] as const
+
+type Trait = { toolHit: number; exp: number; autoMs: number; crit: number; gold: number }
+/** What a hero with no trait of a kind has: an 인턴, or a line that trains another. */
+const PLAIN: Trait = { toolHit: 3, exp: 1, autoMs: 1500, crit: 0, gold: 1 }
+
+/**
+ * The four lines: their names at 1차, 2차 and 3차, and the trait each trains, by tier 0 to 3. `crit` is
+ * percentage points added to 급소찌르기's chance.
+ */
+export const JOBS: Record<JobLine, { label: string; names: readonly [string, string, string]; traits: Partial<Record<keyof Trait, readonly number[]>> }> = {
+  melee: { label: '근접', names: ['디버거 기사', '리팩터 나이트', '아키텍트'], traits: { toolHit: [3, 4, 5, 6] } },
+  magic: { label: '마법', names: ['스크립트 마법사', '컴파일러 메이지', '커널 대마법사'], traits: { exp: [1, 1.2, 1.4, 1.7] } },
+  ranged: { label: '원거리', names: ['API 궁수', '웹훅 스나이퍼', '분산 저격수'], traits: { autoMs: [1500, 1250, 1050, 850] } },
+  rogue: { label: '암살', names: ['핫픽스 도적', '제로데이 어쌔신', '루트킷 섀도우'], traits: { crit: [0, 8, 15, 25], gold: [1, 1.15, 1.3, 1.5] } },
+}
 
 /** By rarity: what the weapon does to attack, the armor to gold, the ring to exp. */
 export const GEAR_MULT: Record<Slot, readonly number[]> = {
@@ -54,7 +78,8 @@ const RARITY_EDGES = [0.6, 0.88, 0.98]
 
 export type Rng = () => number
 /** `advanced`: the kill moved the hero on; one made while the boss waits does not. */
-export type Hit = { dmg: number; crit: boolean; killed: boolean; boss: boolean; advanced: boolean }
+/** `exam`: the hit fell on the 전직 시험관; present only then. */
+export type Hit = { dmg: number; crit: boolean; killed: boolean; boss: boolean; advanced: boolean; exam?: true }
 export type GameEvent = { type: 'tick'; ms: number } | { type: 'tool' } | { type: 'exp'; exp: number }
 export type Purchase = { save: Save; note: string } | { refused: string }
 
@@ -74,6 +99,14 @@ export const fresh = (): Save => ({
 
 /** The hero's job; a save from before jobs is an 인턴. */
 export const jobOf = (save: Save): Job => save.job ?? { line: null, tier: 0, at: 0 }
+export const jobName = (job: Pick<Job, 'line' | 'tier'>) => (job.line && job.tier > 0 ? JOBS[job.line].names[job.tier - 1] : INTERN)
+/** What the hero's job makes of one trait. */
+export const trait = (save: Save, key: keyof Trait) => {
+  const { line, tier } = jobOf(save)
+  return (line && JOBS[line].traits[key]?.[tier]) ?? PLAIN[key]
+}
+/** Milliseconds between auto attacks. */
+export const autoMs = (save: Save) => trait(save, 'autoMs')
 
 const expNeed = (level: number) => Math.round(300 * 1.22 ** (level - 1))
 
@@ -95,7 +128,16 @@ export const mobIndex = (kills: number) => (stageOf(kills) - 1 + (kills % KILLS_
 
 export const gearMult = (save: Save, slot: Slot) => GEAR_MULT[slot][save.gear[slot]] ?? 1
 export const attack = (save: Save) =>
-  Math.round((8 + 2 * levelOf(save.exp)) * ENHANCE_ATTACK ** save.enhance * gearMult(save, 'weapon'))
+  Math.round((8 + 2 * levelOf(save.exp)) * ENHANCE_ATTACK ** save.enhance * gearMult(save, 'weapon') * TIER_ATTACK[jobOf(save).tier])
+
+const stageHp = (save: Save) => MOB_HP * HP_GROWTH ** (stageOf(save.kills) - 1)
+/** What a stage's plain monster pays, before gear, skills and job. */
+const stageReward = (save: Save) => REWARD_GROWTH ** (stageOf(save.kills) - 1)
+/** The attack the pending 전직 시험관 asks for before it steps out; 0 with none pending. */
+export const examNeed = (save: Save) => {
+  const { trial } = jobOf(save)
+  return trial ? Math.ceil(trial.hp / BOSS_TRIES) : 0
+}
 
 /**
  * Who the hero faces. A stage's 10th kill is its boss, but the boss waits until the hero could fell
@@ -104,11 +146,15 @@ export const attack = (save: Save) =>
  * waiting boss asks for.
  */
 export const foeOf = (save: Save) => {
-  const hp = MOB_HP * HP_GROWTH ** (stageOf(save.kills) - 1)
+  // A pending 전직 시험관 steps in front of the stage once the hero could fell it in BOSS_TRIES hits.
+  const { trial } = jobOf(save)
+  if (trial && attack(save) >= examNeed(save)) return { boss: false, exam: true, need: 0, hp: trial.hp, name: EXAM_NAME }
+  const hp = stageHp(save)
   const need = isBoss(save.kills) ? Math.ceil((hp * BOSS_HP) / BOSS_TRIES) : 0
   const boss = need > 0 && attack(save) >= need
   return {
     boss,
+    exam: false,
     need: boss ? 0 : need,
     hp: Math.round(hp * (boss ? BOSS_HP : 1)),
     name: boss ? BOSS_NAME : (MOB_NAMES[mobIndex(save.kills)] ?? ''),
@@ -116,37 +162,67 @@ export const foeOf = (save: Save) => {
 }
 export const skillPoints = (save: Save) =>
   Math.max(0, levelOf(save.exp) - 1 - SKILLS.reduce((sum, id) => sum + save.skills[id], 0))
-export const enhanceCost = (save: Save) => Math.round(50 * ENHANCE_COST ** save.enhance)
+const costAt = (enhance: number) => Math.round(50 * ENHANCE_COST ** enhance)
+export const enhanceCost = (save: Save) => costAt(save.enhance)
+/** What a 계열 변경 costs: the next LINE_CHANGE_ENHANCES 강화 together. */
+export const lineChangeCost = (save: Save) =>
+  Array.from({ length: LINE_CHANGE_ENHANCES }, (_, i) => costAt(save.enhance + i)).reduce((sum, n) => sum + n, 0)
+/** The pending trial's examiner hp, were the hero to apply now: EXAM_HP stage bosses. */
+const examHp = (save: Save) => Math.round(stageHp(save) * BOSS_HP * EXAM_HP)
 
-const strike = (s: Save, times: number, rng: Rng): { save: Save; hit: Hit } => {
-  const crit = rng() < CRIT_CHANCE * s.skills.crit
+const strike = (s: Save, times: number, rng: Rng, now: number): { save: Save; hit: Hit } => {
+  const crit = rng() < CRIT_CHANCE * s.skills.crit + trait(s, 'crit') / 100
   const dmg = Math.round(attack(s) * times * (crit ? CRIT_HIT : 1))
-  const { boss, need, hp } = foeOf(s)
-  const advanced = need === 0
+  const { boss, exam, need, hp } = foeOf(s)
+  const tag = exam ? { exam: true as const } : {}
+  // The examiner stands apart from the stage: felling it moves the job on, not the hero.
+  const advanced = need === 0 && !exam
   // A merge can leave more damage than the monster now standing has hp: it then falls to this hit.
-  if (s.dmg + dmg < hp) return { save: { ...s, dmg: s.dmg + dmg }, hit: { dmg, crit, killed: false, boss, advanced: false } }
-  const reward = REWARD_GROWTH ** (stageOf(s.kills) - 1) * (boss ? BOSS_REWARD : 1)
+  if (s.dmg + dmg < hp) return { save: { ...s, dmg: s.dmg + dmg }, hit: { dmg, crit, killed: false, boss, advanced: false, ...tag } }
+  const reward = stageReward(s) * (boss || exam ? BOSS_REWARD : 1)
+  const job = jobOf(s)
   return {
     save: {
       ...s,
       dmg: 0,
       kills: s.kills + (advanced ? 1 : 0),
-      gold: s.gold + Math.round(MOB_GOLD * reward * gearMult(s, 'armor') * (1 + GREED_GOLD * s.skills.greed)),
-      exp: s.exp + Math.round(MOB_EXP * reward * gearMult(s, 'ring')),
+      gold: s.gold + Math.round(MOB_GOLD * reward * gearMult(s, 'armor') * (1 + GREED_GOLD * s.skills.greed) * trait(s, 'gold')),
+      exp: s.exp + Math.round(MOB_EXP * reward * gearMult(s, 'ring') * trait(s, 'exp')),
+      ...(exam && job.trial && { job: { line: job.trial.line, tier: (job.tier + 1) as Tier, at: Math.max(now, job.at + 1) } }),
     },
-    hit: { dmg, crit, killed: true, boss, advanced },
+    hit: { dmg, crit, killed: true, boss, advanced, ...tag },
   }
 }
 
-/** The one way the game moves: time passing, a tool call, money spent. */
-export const apply = (save: Save, event: GameEvent, rng: Rng): { save: Save; hits: Hit[] } => {
+/**
+ * Auto attacks over `ms`, one each `autoMs` of the save as it stands at that attack (a 전직 mid-way
+ * changes the pace), and the time short of the next: the caller carries it.
+ */
+export const autoAttack = (save: Save, ms: number, rng: Rng, now = 0) => {
+  const hits: Hit[] = []
+  let s = save
+  let left = ms
+  for (let step = autoMs(s); left >= step; step = autoMs(s)) {
+    left -= step
+    const struck = strike(s, 1, rng, now)
+    s = struck.save
+    hits.push(struck.hit)
+  }
+  return { save: s, hits, left }
+}
+
+/** The one way the game moves: time passing, a tool call, money spent. `now` stamps a 전직. */
+export const apply = (save: Save, event: GameEvent, rng: Rng, now = 0): { save: Save; hits: Hit[] } => {
   if (event.type === 'exp') return { save: { ...save, exp: save.exp + event.exp }, hits: [] }
-  const isTool = event.type === 'tool'
-  const count = isTool ? 1 + (rng() < FLURRY_CHANCE * save.skills.flurry ? 1 : 0) : Math.floor(event.ms / AUTO_MS)
+  if (event.type === 'tick') {
+    const { save: s, hits } = autoAttack(save, event.ms, rng, now)
+    return { save: s, hits }
+  }
+  const count = 1 + (rng() < FLURRY_CHANCE * save.skills.flurry ? 1 : 0)
   const hits: Hit[] = []
   let s = save
   for (let i = 0; i < count; i++) {
-    const struck = strike(s, isTool ? TOOL_HIT : 1, rng)
+    const struck = strike(s, trait(s, 'toolHit'), rng, now)
     s = struck.save
     hits.push(struck.hit)
   }
@@ -193,6 +269,46 @@ export const gacha = (save: Save, rng: Rng): Purchase => {
     save: { ...save, gold: save.gold - GACHA_COST, gear: { ...save.gear, [slot]: rarity } },
     note: `${drawn} 장착했어요! ${SLOT_EFFECTS[slot]} x${GEAR_MULT[slot][rarity]}`,
   }
+}
+
+const lineByName = (name: string) =>
+  JOB_LINES.find(line => line === name || JOBS[line].label === name || JOBS[line].names.includes(name))
+const lineList = () => JOB_LINES.map(line => JOBS[line].label).join(', ')
+
+/**
+ * 전직 신청: from the next tier's level, sets the 전직 시험 with its examiner's hp fixed now, so it
+ * does not run away as the stage climbs. An 인턴 names the line; a hero with one keeps it.
+ */
+export const applyJob = (save: Save, name: string, now: number): Purchase => {
+  const job = jobOf(save)
+  if (job.tier >= 3) return { refused: `이미 3차 전직까지 마쳤어요 (${jobName(job)}).` }
+  if (job.trial) return { refused: `이미 전직 시험 중이에요. ${EXAM_NAME}은 공격력 ${examNeed(save)}부터 나와요.` }
+  const need = TIER_LEVEL[job.tier + 1] ?? Infinity
+  if (levelOf(save.exp) < need) return { refused: `${job.tier + 1}차 전직은 Lv.${need}부터예요 (지금 Lv.${levelOf(save.exp)}).` }
+  const line = job.line ?? (name ? lineByName(name) : undefined)
+  if (!line) return { refused: `계열을 골라 주세요: ${lineList()}` }
+  if (name && job.line && lineByName(name) !== job.line) {
+    return { refused: `${job.tier + 1}차 전직은 지금 계열(${JOBS[job.line].label})로 해요. 계열을 바꾸려면 /rpg 계열 <이름>.` }
+  }
+  const trial = { line, hp: examHp(save) }
+  return {
+    save: { ...save, job: { ...job, trial, at: now } },
+    note: `${job.tier + 1}차 전직 시험 신청! ${EXAM_NAME}(HP ${trial.hp})을 쓰러뜨리면 ${jobName({ line, tier: (job.tier + 1) as Tier })}이(가) 돼요.`,
+  }
+}
+
+/** 계열 변경: another line at the same tier, for gold; never mid-trial, never for an 인턴. */
+export const changeLine = (save: Save, name: string, now: number): Purchase => {
+  const job = jobOf(save)
+  const line = lineByName(name)
+  if (!job.line) return { refused: '계열 변경은 1차 전직 뒤에 할 수 있어요. 먼저 /rpg 전직 <계열>.' }
+  if (job.trial) return { refused: '전직 시험 중에는 계열을 바꿀 수 없어요.' }
+  if (!line) return { refused: `바꿀 계열을 골라 주세요: ${lineList()}` }
+  if (line === job.line) return { refused: `이미 ${JOBS[line].label} 계열이에요.` }
+  const cost = lineChangeCost(save)
+  if (save.gold < cost) return { refused: `골드가 부족해요. 계열 변경에는 ${cost}골드가 필요해요 (보유 ${Math.floor(save.gold)}).` }
+  const next = { ...job, line, at: now }
+  return { save: { ...save, gold: save.gold - cost, job: next }, note: `계열 변경! 이제 ${jobName(next)}.` }
 }
 
 export const learn = (save: Save, id: SkillId): Purchase => {

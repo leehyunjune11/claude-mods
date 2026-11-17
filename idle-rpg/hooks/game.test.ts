@@ -4,18 +4,23 @@ import type { IdleRpgSave as Save } from '../types'
 import {
   MOB_NAMES,
   apply,
+  applyJob,
   attack,
+  autoAttack,
+  changeLine,
   costExp,
   enhance,
   enhanceCost,
+  examNeed,
   foeOf,
   fresh,
   gacha,
   isBoss,
-  jobOf,
   join,
+  jobOf,
   learn,
   levelOf,
+  lineChangeCost,
   parseSave,
   share,
   stageOf,
@@ -301,4 +306,121 @@ test('parseSave keeps a good job and drops a bad one alone', () => {
     { line: null, tier: 0, at: 0, trial: { line: 'melee', hp: -1 } },
   ]
   for (const job of bad) expect(parseSave({ ...row, job })).toEqual(row)
+})
+
+const LV10 = 6802 // exp at Lv.10
+const LV30 = 434284
+const as = (line: 'melee' | 'magic' | 'ranged' | 'rogue', tier: 1 | 2 | 3, over: Partial<Save> = {}): Save => ({ ...fresh(), job: { line, tier, at: 0 }, ...over })
+
+test('전직 신청 sets a trial whose examiner stands in front once the hero could fell it, and felling it is the 전직', () => {
+  expect((applyJob(having({ exp: LV10 - 1 }), '마법', 5) as { refused: string }).refused).toContain('Lv.10부터')
+  expect((applyJob(having({ exp: LV10 }), '', 5) as { refused: string }).refused).toContain('근접, 마법, 원거리, 암살')
+
+  // Stage 1's boss has 200 hp: the examiner 600, pegged there however far the hero then goes.
+  const trying = bought(applyJob(having({ exp: LV10, kills: 3 }), '마법', 5))
+  expect(jobOf(trying)).toEqual({ line: null, tier: 0, at: 5, trial: { line: 'magic', hp: 600 } })
+  expect('refused' in applyJob(trying, '마법', 6)).toBe(true)
+  expect(examNeed(trying)).toBe(15)
+  expect(foeOf(trying)).toMatchObject({ exam: true, boss: false, hp: 600, name: '전직 시험관' })
+
+  const { save, hits } = apply(trying, { type: 'tick', ms: 60_000 }, never, 1000)
+  const fell = hits.findIndex(h => h.killed)
+  expect(hits[fell]).toEqual({ dmg: 28, crit: false, killed: true, boss: false, advanced: false, exam: true })
+  expect(hits.slice(fell + 1).every(h => h.exam === undefined)).toBe(true)
+  // Paid as a stage boss, the stage not moved by it; the job moves instead.
+  const after = apply(trying, { type: 'tick', ms: 1500 * (fell + 1) }, never, 1000).save
+  expect(after).toMatchObject({ kills: 3, dmg: 0, gold: 25, exp: LV10 + 30 })
+  expect(jobOf(after)).toEqual({ line: 'magic', tier: 1, at: 1000 })
+  expect(save.kills).toBeGreaterThan(3)
+
+  // 2차 keeps the line, and asks Lv.30.
+  expect((applyJob(after, '', 9) as { refused: string }).refused).toContain('Lv.30부터')
+  const second = bought(applyJob({ ...after, exp: LV30 }, '', 9))
+  expect(jobOf(second).trial).toEqual({ line: 'magic', hp: 600 })
+  expect('refused' in applyJob({ ...after, exp: LV30 }, '근접', 9)).toBe(true)
+  expect('refused' in applyJob(as('rogue', 3, { exp: 1e12 }), '', 9)).toBe(true)
+})
+
+test('an examiner the hero cannot fell in 40 hits waits, and the stage goes on', () => {
+  const far = bought(applyJob(having({ exp: LV10, kills: 215 }), '근접', 1)) // stage 22: the examiner 19394 hp
+  expect(examNeed(far)).toBe(485)
+  expect(foeOf(far)).toEqual(foeOf(having({ exp: LV10, kills: 215 })))
+  expect(foeOf(far).exam).toBe(false)
+  const hour = apply(far, { type: 'tick', ms: 600_000 }, never).save
+  expect(hour.gold).toBeGreaterThan(0)
+  expect(jobOf(hour).trial?.hp).toBe(19394)
+})
+
+test('each line trains its trait, and every tier raises attack', () => {
+  expect([0, 1, 2, 3].map(tier => attack(tier ? as('magic', tier as 1) : fresh()))).toEqual([10, 13, 17, 25])
+
+  // 근접: a tool call strikes 4x at 1차 (the 인턴's 3x), on attack 13.
+  expect(apply(as('melee', 1), { type: 'tool' }, never).hits[0]?.dmg).toBe(52)
+  expect(apply(as('magic', 1), { type: 'tool' }, never).hits[0]?.dmg).toBe(39)
+
+  // 마법: exp x1.2 from a kill.
+  const kill = (x: Save) => apply({ ...x, dmg: 24 }, { type: 'tick', ms: 1500 }, never).save
+  expect(kill(as('magic', 1)).exp).toBe(7) // 6 x 1.2
+  expect(kill(as('melee', 1)).exp).toBe(6)
+
+  // 원거리: an auto attack each 1250ms at 1차, the rest carried.
+  expect(autoAttack(as('ranged', 1), 2600, never)).toMatchObject({ left: 100 })
+  expect(autoAttack(as('ranged', 1), 2600, never).hits.length).toBe(2)
+  expect(autoAttack(fresh(), 2600, never)).toMatchObject({ left: 1100 })
+  expect(autoAttack(as('ranged', 3), 2600, never).hits.length).toBe(3)
+
+  // 암살: +8%p crit with no 급소찌르기, and gold x1.15.
+  expect(apply(as('rogue', 1), { type: 'tick', ms: 1500 }, () => 0.07).hits[0]?.crit).toBe(true)
+  expect(apply(as('rogue', 1), { type: 'tick', ms: 1500 }, () => 0.09).hits[0]?.crit).toBe(false)
+  expect(apply(fresh(), { type: 'tick', ms: 1500 }, () => 0.07).hits[0]?.crit).toBe(false)
+  expect(kill(as('rogue', 3)).gold).toBe(8) // 5 x 1.5, rounded
+  expect(kill(as('ranged', 3)).gold).toBe(5)
+})
+
+test('계열 변경 keeps the tier and costs the next 20 강화', () => {
+  expect(lineChangeCost(fresh())).toBe(2867)
+  // One 강화 on, the window slides: the first price leaves, the 21st comes in.
+  expect(lineChangeCost(having({ enhance: 1 }))).toBe(2867 - 50 + enhanceCost(having({ enhance: 20 })))
+  const refusal = (x: Save, name: string) => (changeLine(x, name, 9) as { refused: string }).refused
+  expect(refusal(having({ gold: 1e6 }), '마법')).toContain('1차 전직 뒤에')
+  expect(refusal(as('melee', 2, { gold: 1e6, job: { line: 'melee', tier: 2, at: 0, trial: { line: 'melee', hp: 9 } } }), '마법')).toContain('시험 중')
+  expect(refusal(as('melee', 2, { gold: 1e6 }), '근접')).toContain('이미 근접')
+  expect(refusal(as('melee', 2, { gold: 1e6 }), '바드')).toContain('근접, 마법, 원거리, 암살')
+  expect(refusal(as('melee', 2, { gold: 2866 }), '마법')).toContain('2867골드')
+
+  const changed = bought(changeLine(as('melee', 2, { gold: 3000 }), '컴파일러 메이지', 9))
+  expect(changed.gold).toBe(133)
+  expect(jobOf(changed)).toEqual({ line: 'magic', tier: 2, at: 9 })
+})
+
+test('a hero who idles and spends all gold on 강화 passes each 전직 within 3 simulated hours', () => {
+  const MINUTE = 60_000
+  // Idle a minute at a time, buying all the 강화 the gold allows: the laziest play there is.
+  const idleUntil = (start: Save, done: (x: Save) => boolean) => {
+    let x = start
+    let ms = 0
+    while (!done(x) && ms < 24 * 3_600_000) {
+      x = apply(x, { type: 'tick', ms: MINUTE }, never, ms).save
+      const more = enhance(x, true)
+      if (!('refused' in more)) x = more.save
+      ms += MINUTE
+    }
+    return { x, hours: ms / 3_600_000 }
+  }
+  const pass = (start: Save, line: string) => {
+    const tier = jobOf(start).tier
+    return idleUntil(bought(applyJob(start, line, 0)), x => jobOf(x).tier > tier)
+  }
+
+  const lv10 = idleUntil(fresh(), x => levelOf(x.exp) >= 10).x
+  const first = pass(lv10, '원거리')
+  expect(first.hours).toBeLessThan(3) // measured: 0.07h (4 minutes), from stage 22
+  // The live hero: stage 22, Lv.26, never a 강화, no gold to start with.
+  const live = pass(having({ exp: 202825, kills: 219 }), '근접')
+  expect(live.hours).toBeLessThan(3) // measured: 0.18h
+  const second = pass(idleUntil(first.x, x => levelOf(x.exp) >= 30).x, '')
+  expect(second.hours).toBeLessThan(3) // measured: 0.37h
+  const third = pass(idleUntil(second.x, x => levelOf(x.exp) >= 60).x, '')
+  expect(third.hours).toBeLessThan(3) // measured: 1.38h
+  expect(jobOf(third.x)).toMatchObject({ line: 'ranged', tier: 3 })
 })

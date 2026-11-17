@@ -3,7 +3,6 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { IdleRpgMeta as Meta, IdleRpgSave as Save, IdleRpgSkillId as SkillId } from '../types'
 import {
-  AUTO_MS,
   BOSS_NAME,
   EXP_PER_USD,
   GACHA_COST,
@@ -18,9 +17,12 @@ import {
   SLOT_NAMES,
   apply,
   attack,
+  autoAttack,
+  autoMs,
   costExp,
   enhance,
   enhanceCost,
+  examNeed,
   foeOf,
   fresh,
   gacha,
@@ -34,6 +36,7 @@ import {
   skillPoints,
   stageOf,
   total,
+  trait,
 } from './game'
 import type { GameEvent, Hit, Purchase } from './game'
 import { BOSS, FONT, HERO_IDLE, HERO_SWING, MOBS, PALETTE, SCENE } from './sprites'
@@ -233,6 +236,12 @@ const bossWait = (x: Save) => {
   return need > 0 ? `보스 ${BOSS_NAME}은 공격력 ${amount(need)}부터 나와요` : ''
 }
 
+/** While a 전직 시험 waits on attack, what it asks for. */
+const examWait = (x: Save) => {
+  const need = examNeed(x)
+  return need > 0 && !foeOf(x).exam ? `시험관은 공격력 ${amount(need)}부터` : ''
+}
+
 const SKILL_HELP: Record<SkillId, string> = {
   flurry: '도구 호출 때 15%씩 한 번 더 강타',
   crit: '5%씩 치명타 확률, 치명타는 2.5배',
@@ -275,30 +284,43 @@ let working = false // a model turn is running: the field plays every frame
 let otherRows = 0 // what the other plugins' rows take of the band
 let lastAt = 0
 let spare = 0 // elapsed time short of one attack
+let pace = 1500 // the save's last auto-attack interval: only says when there may be one to make
 let saving: Promise<unknown> = Promise.resolve()
 
+/** Moves the save by `event`; a tick hands back the time short of its next attack. */
 const play = async ($: EngineInterface, event: GameEvent) => {
+  const now = await $.clock.now()
   let hits: Hit[] = []
-  await update($, save, x => {
-    const next = apply(x, event, Math.random)
+  let left = 0
+  const after = await update($, save, x => {
+    if (event.type !== 'tick') {
+      const next = apply(x, event, Math.random, now)
+      hits = next.hits
+      return next.save
+    }
+    const next = autoAttack(x, event.ms, Math.random, now)
     hits = next.hits
+    left = next.left
     return next.save
   })
+  pace = autoMs(after)
   // A long catch-up is hundreds of hits: the scene plays the last few.
   scene.queue = [...scene.queue, ...hits].slice(-QUEUE)
+  return left
 }
 
-/** Turns the time since the last call into auto attacks. */
+/** Turns the time since the last call into auto attacks, at the pace the save's job sets. */
 const advance = async ($: EngineInterface) => {
   const now = await $.clock.now()
-  // No await between reading and moving lastAt: the timer, tool calls and commands all come here.
+  // No await between reading and moving lastAt and spare: the timer, tool calls and commands all
+  // come here. The time is taken whole and what the attacks leave of it put back after.
   const elapsed = lastAt === 0 ? 0 : Math.min(Math.max(0, now - lastAt), CATCH_UP_MS)
   lastAt = Math.max(lastAt, now)
   spare += elapsed
-  const ms = spare - (spare % AUTO_MS)
-  if (ms === 0) return
-  spare -= ms
-  await play($, { type: 'tick', ms })
+  if (spare < pace) return
+  const ms = spare
+  spare = 0
+  spare += await play($, { type: 'tick', ms })
 }
 
 const LEGACY = 'save' // the one save every session used to write; read as a share, never written
@@ -475,7 +497,8 @@ export const register: Register = on => {
   on('session.measure', async ($, e, next) => {
     if (!e.cost) return next(e)
     const { usd } = e.cost
-    const rate = EXP_PER_USD * gearMult(await read($, save), 'ring')
+    const x = await read($, save)
+    const rate = EXP_PER_USD * gearMult(x, 'ring') * trait(x, 'exp')
     let exp = 0
     await update($, meta, m => {
       const paid = costExp(m.lastUsd, usd, rate)
@@ -541,6 +564,7 @@ export const register: Register = on => {
           {'  '}
           {foe(x)}
           {bossWait(x) && ' (보스 대기)'}
+          {examWait(x) && ` · ${examWait(x)}`}
         </Text>
       </Text>
     )
