@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import type { IdleRpgSave as Save } from '../types'
-import { apply, fresh, join, parseSave, stageOf } from './game'
+import { apply, fresh, join, levelOf, parseSave, stageOf } from './game'
 import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene } from './register'
 import { MOBS, SCENE } from './sprites'
 
@@ -24,7 +24,12 @@ const engine = (on: On, store: Record<string, unknown> = {}) => {
     deny: undefined as string | undefined,
     failSets: 0,
     onSet: undefined as ((key: string) => void) | undefined,
+    toasts: [] as string[],
   }
+  on('ui.toast', (_, e) => {
+    world.toasts.push(e.text)
+    return { value: undefined }
+  })
   on('session.id', () => ({ value: world.id }))
   on('store.keys', () => ({ value: Object.keys(world.store) }))
   on('store.get', (_, e) => ({ value: world.store[e.key] }))
@@ -436,4 +441,35 @@ test('a hit swings, flashes the monster white, floats its damage, and a kill wal
   expect(scene.enter).toBeGreaterThan(0)
   for (let i = 0; i < 20; i++) stepScene(scene)
   expect(isMoving(scene)).toBe(false)
+})
+
+test('a long catch-up toasts each kind of news once, and a rescan that raises the level stays quiet', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on)
+  await start($)
+
+  await clock.advance(8 * 3_600_000)
+  await endTurn($)
+  const caught = apply(fresh(), { type: 'tick', ms: 8 * 3_600_000 }, () => 0.99)
+  expect(caught.hits.filter(h => h.boss && h.killed).length).toBeGreaterThan(5)
+  const kinds = world.toasts.map(text => text.split('!')[0])
+  expect(kinds).toEqual(['레벨 업', '보스 레거시 골렘 처치', '전직 가능'])
+  expect(world.toasts[0]).toContain(`스킬 포인트 +${levelOf(caught.save.exp) - 1}`)
+
+  // Another session's progress, read in, toasts nothing here.
+  world.toasts = []
+  world.store['s:sess-b'] = stored({ exp: 1e7 })
+  await rpg($, '끄기')
+  expect(saved(world).exp).toBeGreaterThan(1e7)
+  expect(world.toasts).toEqual([])
+})
+
+test('felling the examiner toasts the 전직 with the new name', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on, { save: { ...stored({ exp: 6802 }), job: { line: null, tier: 0, at: 1, trial: { line: 'rogue', hp: 600 } } } })
+  await start($)
+  await clock.advance(60_000)
+  await endTurn($)
+  expect(world.toasts).toContain('전직 완료! 이제 핫픽스 도적')
+  expect(saved(world).job).toMatchObject({ line: 'rogue', tier: 1 })
 })

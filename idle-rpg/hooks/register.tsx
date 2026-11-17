@@ -15,6 +15,7 @@ import {
   SLOTS,
   SLOT_EFFECTS,
   SLOT_NAMES,
+  TIER_LEVEL,
   apply,
   attack,
   autoAttack,
@@ -27,9 +28,12 @@ import {
   fresh,
   gacha,
   gearMult,
+  jobName,
+  jobOf,
   join,
   learn,
   levelInfo,
+  levelOf,
   mobIndex,
   parseSave,
   share,
@@ -287,12 +291,39 @@ let spare = 0 // elapsed time short of one attack
 let pace = 1500 // the save's last auto-attack interval: only says when there may be one to make
 let saving: Promise<unknown> = Promise.resolve()
 
+/** The level the next 전직 opens at, while none is pending; undefined past 3차 or mid-trial. */
+const nextTierLevel = (x: Save) => {
+  const { tier, trial } = jobOf(x)
+  return trial || tier >= 3 ? undefined : TIER_LEVEL[tier + 1]
+}
+/** Whether a 전직 can be applied for now. */
+const canApply = (x: Save) => levelOf(x.exp) >= (nextTierLevel(x) ?? Infinity)
+
+/**
+ * What a move of this session's own made happen, a line per kind at most: a catch-up of hundreds
+ * of hits says each thing once. A rescan of other rows never comes here, so it stays quiet.
+ */
+export const news = (before: Save, after: Save, hits: readonly Hit[]) => {
+  const said: string[] = []
+  const [from, to] = [levelOf(before.exp), levelOf(after.exp)]
+  if (to > from) said.push(`레벨 업! Lv.${to} · 스킬 포인트 +${to - from}`)
+  if (hits.some(h => h.killed && h.boss)) said.push(`보스 ${BOSS_NAME} 처치! 스테이지 ${stageLabel(after)}`)
+  const opens = nextTierLevel(before)
+  if (opens !== undefined && from < opens && canApply(after)) {
+    said.push(`전직 가능! Lv.${opens} 달성 · /rpg 전직${jobOf(after).tier === 0 ? ' <계열>' : ''}`)
+  }
+  if (jobOf(after).tier > jobOf(before).tier) said.push(`전직 완료! 이제 ${jobName(jobOf(after))}`)
+  return said
+}
+
 /** Moves the save by `event`; a tick hands back the time short of its next attack. */
 const play = async ($: EngineInterface, event: GameEvent) => {
   const now = await $.clock.now()
   let hits: Hit[] = []
   let left = 0
+  let before = fresh()
   const after = await update($, save, x => {
+    before = x
     if (event.type !== 'tick') {
       const next = apply(x, event, Math.random, now)
       hits = next.hits
@@ -306,6 +337,7 @@ const play = async ($: EngineInterface, event: GameEvent) => {
   pace = autoMs(after)
   // A long catch-up is hundreds of hits: the scene plays the last few.
   scene.queue = [...scene.queue, ...hits].slice(-QUEUE)
+  for (const text of news(before, after, hits)) $.ui.toast(text)
   return left
 }
 
@@ -448,7 +480,14 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
       return `강화 +${x.enhance} 성공${count > 1 ? ` (${count}번)` : ''}! 공격력 ${amount(attack(x))}. ${goldLeft(x)}`
     })
   }
-  if (verb === '뽑기') return settle(await buy($, x => gacha(x, Math.random)), (x, note) => `${note} ${goldLeft(x)}`)
+  if (verb === '뽑기') {
+    const before = (await read($, save)).gear
+    return settle(await buy($, x => gacha(x, Math.random)), (x, note) => {
+      const big = SLOTS.find(slot => x.gear[slot] >= 3 && x.gear[slot] > before[slot])
+      if (big) $.ui.toast(`${RARITY_NAMES[x.gear[big]]} ${SLOT_NAMES[big]} 획득!`)
+      return `${note} ${goldLeft(x)}`
+    })
+  }
   if (verb === '스킬') {
     const id = SKILL_IDS[arg]
     if (!id) return `스킬 이름을 적어 주세요: ${SKILLS.map(s => SKILL_NAMES[s]).join(', ')}`
