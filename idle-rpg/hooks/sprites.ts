@@ -36,6 +36,7 @@ export const PALETTE: Record<string, string> = {
   M: '#ff7ae0', // a look's glow: orb, spark
   Q: '#b0302a', // cape (2차 up)
   X: '#f2c230', // crown, aura (3차)
+  k: '#3a2a2a', // boots (the big scene)
 }
 
 /** The night scheme, the one drawn on a dark terminal. `star` dots its sky. */
@@ -534,3 +535,176 @@ export const FONT: Record<string, string[]> = {
   K: ['#.#', '#.#', '##.', '#.#', '#.#'],
   E: ['###', '#..', '##.', '#..', '###'],
 }
+
+// --- The big scene: 18 pixels tall, the ground on the last. The hero is drawn at about twice the
+// small one's detail: one body, and over it what each line wears and holds, laid by `frame`. Every
+// frame is the same 24 by 17 canvas with the body's top left at (2, 2), so the feet never move.
+
+/** A sprite and where its top left goes, the body's top left being (0, 0). */
+type Layer = readonly [rows: readonly string[], dx: number, dy: number]
+const CANVAS = { w: 24, h: 17, x: 2, y: 2 }
+
+/** Lays the layers on the canvas in order, later ones on top; what falls off it is dropped. */
+const canvas = (layers: readonly Layer[]) => {
+  const grid = Array.from({ length: CANVAS.h }, () => Array<string>(CANVAS.w).fill('.'))
+  for (const [rows, dx, dy] of layers) {
+    rows.forEach((row, j) => {
+      ;[...row].forEach((c, i) => {
+        const line = grid[CANVAS.y + dy + j]
+        const x = CANVAS.x + dx + i
+        if (c !== '.' && line && x >= 0 && x < CANVAS.w) line[x] = c
+      })
+    })
+  }
+  return grid.map(row => row.join(''))
+}
+
+/** The rows a sprite takes, each a pixel row twice and each pixel twice. */
+export const scale2 = (rows: readonly string[]) =>
+  rows.flatMap(row => {
+    const wide = [...row].map(c => c + c).join('')
+    return [wide, wide]
+  })
+
+/** The sprite turned to face the other way. */
+const mirror = (rows: readonly string[]) => rows.map(row => [...row].reverse().join(''))
+
+/** The sprite less the columns nothing is drawn in, at either side. */
+const trim = (rows: readonly string[]) => {
+  const used = (i: number) => rows.some(row => row[i] !== '.')
+  const wide = rows[0]?.length ?? 0
+  let from = 0
+  let to = wide
+  while (from < to && !used(from)) from++
+  while (to > from && !used(to - 1)) to--
+  return rows.map(row => row.slice(from, to))
+}
+
+// The body, facing right: the back hand at (1, 9); the front hand is a layer, it moves.
+const BODY = [
+  '...hhhhh..',
+  '..hhhhhhh.',
+  '..hhHHHHh.',
+  '..hHHKHKH.',
+  '...HHHHH..',
+  '....HHH...',
+  '..AAAAAA..',
+  '.AAAATAAA.',
+  '.AAAATAAa.',
+  '.HAAATAa..',
+  '..TTTTTT..',
+  '..aaaaaa..',
+  '..aa..aa..',
+  '..aa..aa..',
+  '..kkk.kkk.',
+]
+/** The off beat: all but the feet a pixel lower. */
+const BODY_BOB = ['..........', ...BODY.slice(0, 12), ...BODY.slice(13)]
+/** Mid-attack: the feet apart. */
+const BODY_LUNGE = [...BODY.slice(0, 12), '.aa....aa.', 'aa......aa', 'kk......kk']
+
+const HAND: Layer = [['H'], 8, 9]
+const RAISE: Layer = [['.H', 'a.'], 8, 5]
+const FORWARD: Layer = [['aH'], 9, 8]
+const CAPE: Layer = [['.~', '~~', '~~', '~~', '~~', '~~', '~~.', '~~~'], -1, 6]
+const CROWN: Layer = [['^.^.^', '^^^^^'], 3, -2]
+const SPARKS: Layer[] = [[['^'], -1, 1], [['^'], 11, -1], [['^'], -2, 9], [['^'], 12, 12]]
+
+/** A layer list a pixel lower, for the off beat. */
+const lower = (layers: readonly Layer[], by: number) => layers.map(([rows, dx, dy]): Layer => [rows, dx, dy + by])
+
+/**
+ * A line's four frames: the cape and `under` behind the body, `wear` on it in every frame, and in
+ * each frame what the hands do. `lunge` spreads the feet for the attack (a robe hides them).
+ */
+const bigLine = (p: { under?: Layer[]; wear: Layer[]; idle: Layer[]; raised: Layer[]; landed: Layer[]; lunge?: boolean }): Frames => {
+  const under = [CAPE, ...(p.under ?? [])]
+  const legs = p.lunge === false ? BODY : BODY_LUNGE
+  const frame = (body: readonly string[], over: readonly Layer[], by = 0) =>
+    canvas([...lower(under, by), [body, 0, 0], ...lower([...p.wear, ...over], by)])
+  return {
+    idle: [frame(BODY, p.idle), frame(BODY_BOB, p.idle, 1)],
+    swing: [frame(legs, p.raised), frame(legs, p.landed)],
+  }
+}
+
+const SWORD = ['.W.', '.W.', '.W.', '.W.', '.W.', 'YYY', '.D.']
+const BIG_MELEE = bigLine({
+  wear: [
+    [['...AAAAA..', '..AAAAAAA.', '..aAAAAAA.', '..aABBBBA.'], 0, 0],
+    [['.TTT.', 'TTDTT', 'TDDDT', 'TTDTT', '.TTT.', '..T..'], -2, 7],
+    CROWN,
+  ],
+  idle: [[SWORD, 7, 3], HAND],
+  raised: [[SWORD, 8, -1], RAISE],
+  landed: [FORWARD, [['YWWWWWW'], 11, 8], [['C.', '.C', '.C', '.C', 'C.'], 18, 6]],
+})
+
+const STAFF = ['MMM', 'MMM', ...Array<string>(13).fill('.D.')]
+const BIG_MAGIC = bigLine({
+  wear: [
+    [['....a.....', '....aA....', '...aAAA...', '..aAAAAA..', '.TTTTTTTTT'], 0, -2],
+    [['..aATAAA..', '.aAATAAAA.', '.aAATAAAA.', 'aAAAATAAAA'], 0, 10],
+    ...SPARKS,
+  ],
+  idle: [[STAFF, 8, -1], HAND],
+  raised: [[STAFF, 8, -2], RAISE, [['C.C', '...', 'C.C'], 8, -2]],
+  landed: [FORWARD, [['......MM', 'DDDDDDMM'], 8, 7], [['..CMM.', 'CCMMMM', '..CMM.'], 16, 6]],
+  lunge: false,
+})
+
+const BOW = ['SD.', 'S.D', 'S.D', 'S.D', 'S.D', 'S.D', 'S.D', 'S.D', 'SD.']
+const BIG_RANGED = bigLine({
+  wear: [[['...AAAA...', '..AAAAAAA.', '..aAAAAAAA'], 0, 0], [['T', 'T', 'T'], 1, -1], CROWN],
+  idle: [[BOW, 9, 5], HAND],
+  raised: [FORWARD, [BOW, 11, 4], [['DDDDDDW'], 8, 8]],
+  landed: [FORWARD, [BOW, 11, 4], [['CCDDDW'], 15, 8]],
+})
+
+const DAGGER = ['W', 'W', 'D']
+const BIG_ROGUE = bigLine({
+  wear: [
+    [['...aAAAa..', '..aAAAAAa.', '..aAAAAAA.', '..aAKTKTA.', '..aAKKKKA.', '...aAAA...'], 0, 0],
+    [DAGGER, 1, 6],
+    ...SPARKS,
+  ],
+  idle: [[DAGGER, 8, 7], HAND],
+  raised: [[DAGGER, 9, 2], RAISE],
+  landed: [FORWARD, [['WW'], 11, 8], [['C...C', '.C.C.', '..C..', '.C.C.', 'C...C'], 14, 6]],
+})
+
+const DUCK = ['.YY.', '.YKR', 'YYYY', '.YY.']
+const BIG_INTERN = bigLine({
+  wear: [],
+  idle: [HAND],
+  raised: [[DUCK, 8, 1], RAISE],
+  landed: [FORWARD, [['CC'], 12, 8], [DUCK, 14, 6]],
+})
+
+/** The big scene's looks, keyed as LOOKS is and colored the same. */
+export const BIG_LOOKS: Record<string, Look> = Object.fromEntries(
+  Object.entries(LOOKS).map(([id, small]) => {
+    const line = id.replace(/\d$/, '')
+    const tier = Number(id.at(-1)) || 0
+    const frames = { melee: BIG_MELEE, magic: BIG_MAGIC, ranged: BIG_RANGED, rogue: BIG_ROGUE }[line] ?? BIG_INTERN
+    return [id, look(frames, tier, small.colors)]
+  }),
+)
+
+/** The examiner at the hero's size: a gown, a mortarboard, a monocle and a clipboard; facing left. */
+export const BIG_EXAMINER = trim(
+  mirror(
+    canvas([
+      [BODY.map(row => row.replaceAll('A', 'P').replaceAll('a', 'p').replaceAll('T', 'Y')), 0, 0],
+      [['KKKKKKKKKKK', '..KKKKKK.Y.', '.........Y.'], -1, -1],
+      [['W'], 7, 3],
+      [['DDDD', 'DSSD', 'DSSD', 'DSSD', 'DDDD'], 7, 7],
+      HAND,
+    ]),
+  ),
+)
+
+const BOSS_CROWN = ['Y....Y....Y', 'YY..YYY..YY', 'YYYYYRYYYYY'].map(row => `.......${row}........`)
+/** The golem twice the size, crowned: its eyes flare gold on the off beat. */
+export const BIG_BOSS = [...BOSS_CROWN, ...scale2(BOSS.slice(2))]
+export const BIG_BOSS_STEP = [...BOSS_CROWN, ...scale2(BOSS.slice(2).map(row => row.replaceAll('R', 'Y')))]

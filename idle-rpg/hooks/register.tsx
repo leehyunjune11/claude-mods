@@ -50,7 +50,23 @@ import {
   trait,
 } from './game'
 import type { GameEvent, Hit, Purchase } from './game'
-import { BOSS, BOSS_STEP, EXAMINER, FONT, LOOKS, MOB_STEPS, MOBS, PALETTE, SCENE, SCHEMES, TINTS } from './sprites'
+import {
+  BIG_BOSS,
+  BIG_BOSS_STEP,
+  BIG_EXAMINER,
+  BIG_LOOKS,
+  BOSS,
+  BOSS_STEP,
+  EXAMINER,
+  FONT,
+  LOOKS,
+  MOB_STEPS,
+  MOBS,
+  PALETTE,
+  SCENE,
+  SCHEMES,
+  TINTS,
+} from './sprites'
 import type { Scheme } from './sprites'
 
 const RASTER = 'field'
@@ -66,15 +82,16 @@ const meta = atom({ plugin: 'idle-rpg', key: 'meta' } as const, { on: true } as 
 /** The pane's own: whether [c] is picking a line, and the last press's answer. */
 const pane = atom({ plugin: 'idle-rpg', key: 'pane' } as const, { picking: false, note: '' })
 
-// --- The scene: 10 pixels tall, one cell to two pixels, the ground on the last pixel.
+// --- The scene: one cell to two pixels, the ground on the last pixel. 작게 is 10 pixels tall; 크게
+// is 18, with a hero drawn at twice the detail and the golem at twice the size.
 
-const ROWS = 5
-const H = ROWS * 2
-const GROUND = H - 1
+/** Each size: its rows, where the hero and the monster stand, and the columns it needs. */
+const SIZES = {
+  small: { rows: 5, heroX: 2, mobX: 18, minCols: 40 }, // the hero, a boss and a damage number side by side
+  big: { rows: 9, heroX: 1, mobX: 26, minCols: 70 }, // the crowned golem and its number
+}
+export type Size = keyof typeof SIZES
 const MAX_COLS = 72
-const MIN_COLS = 40 // the hero, a boss and a damage number side by side
-const HERO_X = 2
-const MOB_X = 18
 const SWING = 4 // frames an attack takes
 const IMPACT = 2 // the frame of it that lands
 const FLASH = 3
@@ -163,11 +180,16 @@ const viewOf = (s: Scene, x: Save): View => {
   }
 }
 
-/** One color per pixel, row-major, `cols * H`. */
-export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 'dark') => {
+/** One color per pixel, row-major, `cols` by the size's height. */
+export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 'dark', size: Size = 'small') => {
+  const { rows, heroX: HERO_X, mobX: MOB_X } = SIZES[size]
+  const H = rows * 2
+  const GROUND = H - 1
+  const big = size === 'big'
   const COLOR = SCENE_COLORS[scheme]
   const PAL = palOf(scheme, view.look ?? 'intern')
-  const art = LOOKS[view.look ?? 'intern'] ?? LOOKS.intern
+  const looks = big ? BIG_LOOKS : LOOKS
+  const art = looks[view.look ?? 'intern'] ?? looks.intern
   const p = new Uint32Array(cols * H).fill(COLOR.sky)
   const px = (x: number, y: number, c: number) => {
     const a = Math.round(x)
@@ -188,7 +210,7 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
     for (let j = -1; ring && j <= rows.length; j++) {
       for (let i = -1; i <= wide; i++) {
         const near = solid(i - 1, j) || solid(i + 1, j) || solid(i, j - 1) || solid(i, j + 1)
-        if (!solid(i, j) && near && sy + j < GROUND) px(sx + i, sy + j, PAL.K)
+        if (!solid(i, j) && near && sy + j < GROUND) px(sx + i, sy + j, PAL.K ?? 0)
       }
     }
     rows.forEach((row, j) => {
@@ -214,7 +236,7 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
   const walk = Math.round((view.kills - s.enter / ENTER) * 6)
   for (let x = 0; x < cols; x++) {
     const u = x + walk
-    const rise = 1 + Math.round(1.5 + 1.5 * Math.sin(u / 6))
+    const rise = 1 + Math.round((1.5 + 1.5 * Math.sin(u / 6)) * (H / 10))
     for (let y = GROUND - rise; y < GROUND; y++) px(x, y, COLOR.hill)
     if (((u % 17) + 17) % 17 === 0) {
       for (let y = GROUND - 6; y < GROUND; y++) px(x, y, COLOR.tree)
@@ -231,7 +253,8 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
   // A monster shifts to its second frame on the off beat while it waits, and hops as it walks in.
   const kind = view.boss ? MOBS.length : mobIndex(view.kills)
   const step = beat === 1 && s.enter === 0 && !s.cur
-  const mob = view.exam ? EXAMINER : ((step ? [...MOB_STEPS, BOSS_STEP] : [...MOBS, BOSS])[kind] ?? BOSS)
+  const boss = big ? (step ? BIG_BOSS_STEP : BIG_BOSS) : step ? BOSS_STEP : BOSS
+  const mob = view.exam ? (big ? BIG_EXAMINER : EXAMINER) : ([...(step ? MOB_STEPS : MOBS), boss][kind] ?? boss)
   const tints = TINTS[kind] ?? []
   const tint = view.exam ? {} : (tints[(stageOf(view.kills) - 1) % tints.length] ?? {})
   const wide = mob[0]?.length ?? 0
@@ -246,7 +269,7 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
 
   s.floats.forEach((f, n) => {
     ;[...f.text].forEach((digit, i) => {
-      sprite(FONT[digit] ?? [], MOB_X + wide + 2 + i * 4 + n * 2, f.y, { ink: f.crit ? COLOR.crit : COLOR.damage, ring: false })
+      sprite(FONT[digit] ?? [], MOB_X + wide + 2 + i * 4 + n * 2, f.y + H - 10, { ink: f.crit ? COLOR.crit : COLOR.damage, ring: false })
     })
   })
   return p
@@ -255,10 +278,11 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
 const UPPER_HALF = 0x2580
 
 /** RasterProps `cells`: an upper half block per cell, its foreground the upper pixel. */
-export const sceneCells = (s: Scene, view: View, cols: number, scheme: Scheme = 'dark') => {
-  const p = paintScene(s, view, cols, scheme)
-  const words = new Uint32Array(cols * ROWS * 3)
-  for (let r = 0; r < ROWS; r++) {
+export const sceneCells = (s: Scene, view: View, cols: number, scheme: Scheme = 'dark', size: Size = 'small') => {
+  const p = paintScene(s, view, cols, scheme, size)
+  const { rows } = SIZES[size]
+  const words = new Uint32Array(cols * rows * 3)
+  for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const at = (r * cols + c) * 3
       words[at] = UPPER_HALF
@@ -283,10 +307,15 @@ export const rowsOf = (node: unknown): number => {
   return stacked + (props?.borderStyle ? 2 : 0)
 }
 
-/** What this row draws in a band of `maxRows` where other plugins' rows take `others`. */
-export const bandLayout = (maxRows: number, columns: number, others: number) => {
+/**
+ * What this row draws in a band of `maxRows` where other plugins' rows take `others`: the scene in
+ * the size asked for, or 작게 when 크게 does not fit, or the line alone.
+ */
+export const bandLayout = (maxRows: number, columns: number, others: number, size: Size = 'small') => {
   const room = maxRows - others
-  if (room > ROWS && columns >= MIN_COLS) return 'field'
+  const fits = (at: Size) => room > SIZES[at].rows && columns >= SIZES[at].minCols
+  if (size === 'big' && fits('big')) return 'big'
+  if (fits('small')) return 'field'
   return room >= 1 ? 'line' : 'none'
 }
 
@@ -378,6 +407,7 @@ export const report = (x: Save) => {
     '  /rpg 전직 [근접|마법|원거리|암살]: Lv.10·30·60부터 전직 시험 신청 (인턴은 계열을 골라요)',
     `  /rpg 계열 <이름>: 같은 차수에서 계열 바꾸기 (다음 강화 20번 값, 지금 ${amount(lineChangeCost(x))}골드)`,
     `  /rpg 테마 [시스템|다크|라이트]: 사냥터 색 (지금 ${THEME_NAMES[theme]})`,
+    `  /rpg 크기 [작게|크게]: 사냥터 크기 (지금 ${SIZE_NAMES[size]})`,
     '  /rpg 끄기 · /rpg 켜기: 띠 숨기기 · 다시 보이기 (꺼도 사냥은 계속돼요)',
   ].join('\n')
 }
@@ -435,6 +465,21 @@ const setTheme = async ($: EngineInterface, name: string) => {
   await $.store.set('theme', next)
   $.ui.invalidate('ui.render')
   return `테마: ${THEME_NAMES[next]}${next === 'system' ? ' (macOS 화면 모드를 따라가요)' : ''}`
+}
+
+// --- The size: 작게 or 크게, the person's setting, kept in the store. 작게 unless asked.
+
+const SIZE_NAMES: Record<Size, string> = { small: '작게', big: '크게' }
+let size: Size = 'small'
+
+const setSize = async ($: EngineInterface, name: string) => {
+  const sizes = Object.keys(SIZE_NAMES) as Size[]
+  const next = sizes.find(at => SIZE_NAMES[at] === name || at === name) ?? (name ? undefined : size === 'small' ? 'big' : 'small')
+  if (!next) return `크기는 ${sizes.map(at => SIZE_NAMES[at]).join(', ')} 중에서 골라 주세요.`
+  size = next
+  await $.store.set('size', next)
+  $.ui.invalidate('ui.render')
+  return `크기: ${SIZE_NAMES[next]}${next === 'big' ? ` (사냥터 ${SIZES.big.rows}줄, 자리가 모자라면 작게 그려요)` : ''}`
 }
 
 /**
@@ -617,6 +662,7 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
   }
   if (verb === '끄기' || verb === '켜기') return setOn($, verb === '켜기')
   if (verb === '테마') return setTheme($, arg)
+  if (verb === '크기') return setSize($, arg)
   if (verb === '강화') {
     const before = (await read($, save)).enhance
     return settle(await buy($, x => enhance(x, arg === '최대')), x => {
@@ -732,10 +778,12 @@ export const register: Register = on => {
     await $.command.register({
       name: 'rpg',
       description: '방치형 RPG: 상태·메뉴 보기, 강화, 뽑기, 스킬, 전직',
-      argumentHint: '[강화 [최대] | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 끄기 | 켜기]',
+      argumentHint: '[강화 [최대] | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 끄기 | 켜기]',
     })
     const kept = await $.store.get('theme')
     theme = THEMES.find(t => t === kept) ?? 'system'
+    const keptSize = await $.store.get('size')
+    size = keptSize === 'big' ? 'big' : 'small'
     systemAt = -Infinity
     checkSystem($, await $.clock.now())
     const stored = await $.store.get('on')
@@ -822,7 +870,8 @@ export const register: Register = on => {
         </Box>
         <Box columnGap={2}>
           {key('t', `테마: ${THEME_NAMES[theme]}`, '테마')}
-          <Text dimColor>시스템 → 다크 → 라이트 · Esc 닫기</Text>
+          {key('s', `크기: ${SIZE_NAMES[size]}`, '크기')}
+          <Text dimColor>Esc 닫기</Text>
         </Box>
         {note !== '' && <Text dimColor>{note}</Text>}
       </Box>
@@ -920,8 +969,8 @@ export const register: Register = on => {
     if (e.surface !== 'terminal') return <Box flexDirection="column">{line}</Box>
     const width = Math.min(e.props.bodyColumns, MAX_COLS)
     // A collapsed band shows nothing: no field to keep drawing.
-    const layout = e.props.isCollapsed ? 'line' : bandLayout(e.props.maxRows, width, otherRows)
-    if (layout !== 'field') {
+    const layout = e.props.isCollapsed ? 'line' : bandLayout(e.props.maxRows, width, otherRows, size)
+    if (layout !== 'field' && layout !== 'big') {
       stopAnim()
       return layout === 'none' ? next(e) : <Box flexDirection="column">{line}</Box>
     }
@@ -930,9 +979,15 @@ export const register: Register = on => {
     band = e.requestId
     startAnim($, working && isMoving(scene))
     const { Raster } = $.ui.resolve(e)
+    const drawn: Size = layout === 'big' ? 'big' : 'small'
     return (
       <Box flexDirection="column">
-        <Raster key={RASTER} columns={cols} rows={ROWS} cells={sceneCells(scene, viewOf(scene, x), cols, scheme())} />
+        <Raster
+          key={RASTER}
+          columns={cols}
+          rows={SIZES[drawn].rows}
+          cells={sceneCells(scene, viewOf(scene, x), cols, scheme(), drawn)}
+        />
         {line}
       </Box>
     )

@@ -136,14 +136,19 @@ test('a short band, a collapsed one and a survey leave the field out', async ($,
 test('beside the taxi the row takes only what the taxi leaves of maxRows', () => {
   // The taxi's own rows: its 3 of text, and a road of up to 7 with a border of 2 where they fit.
   const taxi = (maxRows: number) => Math.min(maxRows, 12)
-  const rows = { field: 6, line: 1, none: 0 }
+  const rows = { big: 10, field: 6, line: 1, none: 0 }
   for (let maxRows = 6; maxRows <= 40; maxRows++) {
-    expect(taxi(maxRows) + rows[bandLayout(maxRows, 72, taxi(maxRows))]).toBeLessThanOrEqual(maxRows)
+    for (const size of ['small', 'big'] as const) {
+      expect(taxi(maxRows) + rows[bandLayout(maxRows, 72, taxi(maxRows), size)]).toBeLessThanOrEqual(maxRows)
+    }
   }
   expect([12, 13, 17, 18].map(maxRows => bandLayout(maxRows, 72, 12))).toEqual(['none', 'line', 'line', 'field'])
   // Alone it needs its own six rows, and the columns for the hero and a boss.
   expect([5, 6].map(maxRows => bandLayout(maxRows, 72, 0))).toEqual(['line', 'field'])
   expect(bandLayout(40, 39, 0)).toBe('line')
+  // 크게 takes ten rows and 70 columns, and falls back to 작게 where it does not fit.
+  expect([9, 10].map(maxRows => bandLayout(maxRows, 72, 0, 'big'))).toEqual(['field', 'big'])
+  expect(bandLayout(40, 69, 0, 'big')).toBe('field')
 })
 
 test('a row of another plugin in the band takes the field away where both do not fit', async ($, on) => {
@@ -757,4 +762,38 @@ test('the hills slide along as a new monster walks in, and the day clouds drift 
     return [...paintScene(scene, { kills: 0, boss: false, left: 1 }, 72, 'light')].map(c => c === cloud)
   }
   expect(at(240)).not.toEqual(at(0))
+})
+
+test('/rpg 크기 draws the field 크게 where it fits and 작게 where not, and the store keeps it', async ($, on) => {
+  mock.clock(on, { now: NOON })
+  const world = engine(on)
+  await start($)
+  const rows = async (props: { maxRows?: number } = {}) => {
+    const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, ...props }, surface: 'terminal' })
+    const raster = await ui.find({ type: 'Raster' })
+    await ui.unmount()
+    return raster?.props.rows
+  }
+  expect(await rows()).toBe(5)
+  expect(await rpg($, '크기 크게')).toContain('크기: 크게')
+  expect(world.store.size).toBe('big')
+  expect(await rows()).toBe(9)
+  expect(await rows({ maxRows: 9 })).toBe(5) // no room for 크게: 작게 instead
+  expect(await rpg($, '크기')).toContain('크기: 작게') // no name: the other one
+  expect(await rows()).toBe(5)
+  expect(await rpg($, '크기 거대')).toContain('작게, 크게')
+})
+
+test('every big look and the examiner, mid-attack on a day sky, draw nothing near white but the clouds', () => {
+  const cloud = hexOf(DAY_SCENE.star)
+  for (const look of Object.keys(LOOKS)) {
+    for (const exam of [false, true]) {
+      const landed = newScene()
+      landed.queue.push({ dmg: 1234, crit: false, killed: false, boss: false, advanced: false })
+      for (let i = 0; i < 3; i++) stepScene(landed)
+      const day = paintScene(landed, { kills: 3, boss: false, left: 0.5, exam, look }, 72, 'light', 'big')
+      expect(day.length).toBe(72 * 18)
+      expect([look, [...new Set(day)].filter(c => c !== cloud && luminance(c) > 0.75)]).toEqual([look, []])
+    }
+  }
 })
