@@ -25,6 +25,7 @@ export const PALETTE: Record<string, string> = {
   n: '#565049', // stone, shaded
 }
 
+/** The night scheme, the one drawn on a dark terminal. `star` dots its sky. */
 export const SCENE = {
   sky: '#0d1220',
   star: '#2c3654',
@@ -35,6 +36,35 @@ export const SCENE = {
   damage: '#f4f4f4',
   crit: '#ffd24a',
 }
+
+/**
+ * The day scheme, for a light terminal: clouds where the night has stars, and dark ink for
+ * everything the night draws light, which a day sky would swallow (the blade, the flash, the
+ * numbers, the guard, the slash).
+ */
+export const DAY_SCENE: typeof SCENE = {
+  sky: '#9fd4f5',
+  star: '#f4f9fd', // clouds
+  ground: '#7fb35a',
+  hp: '#d62f26',
+  hpLost: '#f3cbc6',
+  flash: '#1d2333',
+  damage: '#1d2333',
+  crit: '#b43c0a',
+}
+/** What the day draws in place of PALETTE's light colors. */
+export const DAY_PALETTE: Record<string, string> = {
+  W: '#3a4456',
+  Y: '#8a5a00',
+  C: '#1559b0',
+  c: '#0d3f80',
+}
+
+export const SCHEMES = {
+  dark: { scene: SCENE, palette: {} as Record<string, string> },
+  light: { scene: DAY_SCENE, palette: DAY_PALETTE },
+}
+export type Scheme = keyof typeof SCHEMES
 
 /** The hero standing; the two frames alternate. */
 export const HERO_IDLE = [

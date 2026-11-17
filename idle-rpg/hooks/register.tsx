@@ -49,7 +49,8 @@ import {
   trait,
 } from './game'
 import type { GameEvent, Hit, Purchase } from './game'
-import { BOSS, FONT, HERO_IDLE, HERO_SWING, MOBS, PALETTE, SCENE } from './sprites'
+import { BOSS, FONT, HERO_IDLE, HERO_SWING, MOBS, PALETTE, SCENE, SCHEMES } from './sprites'
+import type { Scheme } from './sprites'
 
 const RASTER = 'field'
 const FRAME_MS = 83
@@ -81,8 +82,13 @@ const FLOAT = 10
 const QUEUE = 4
 
 const rgb = (hex: string) => Number.parseInt(hex.slice(1), 16)
-const PAL = Object.fromEntries(Object.entries(PALETTE).map(([c, hex]) => [c, rgb(hex)]))
-const COLOR = Object.fromEntries(Object.entries(SCENE).map(([name, hex]) => [name, rgb(hex)])) as Record<keyof typeof SCENE, number>
+const colors = <T extends Record<string, string>>(hexes: T) =>
+  Object.fromEntries(Object.entries(hexes).map(([c, hex]) => [c, rgb(hex)])) as Record<keyof T, number>
+/** Each scheme's scene colors and its palette, the day's light-color swaps laid over PALETTE. */
+const INKS = {
+  dark: { color: colors(SCHEMES.dark.scene), pal: colors({ ...PALETTE, ...SCHEMES.dark.palette }) },
+  light: { color: colors(SCHEMES.light.scene), pal: colors({ ...PALETTE, ...SCHEMES.light.palette }) },
+}
 
 export type View = { kills: number; boss: boolean; left: number }
 
@@ -142,7 +148,8 @@ const viewOf = (s: Scene, x: Save): View => {
 }
 
 /** One color per pixel, row-major, `cols * H`. */
-export const paintScene = (s: Scene, view: View, cols: number) => {
+export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 'dark') => {
+  const { color: COLOR, pal: PAL } = INKS[scheme]
   const p = new Uint32Array(cols * H).fill(COLOR.sky)
   const px = (x: number, y: number, c: number) => {
     const a = Math.round(x)
@@ -159,8 +166,16 @@ export const paintScene = (s: Scene, view: View, cols: number) => {
   }
 
   for (let x = 0; x < cols; x++) {
-    if ((x * 7919) % 11 === 0) px(x, (x * 31) % 6, COLOR.star)
+    if (scheme === 'dark' && (x * 7919) % 11 === 0) px(x, (x * 31) % 6, COLOR.star)
     px(x, GROUND, COLOR.ground)
+  }
+  // The day's clouds: a puff every 23 columns, a row lower every other one.
+  if (scheme === 'light') {
+    for (let x0 = 7, n = 0; x0 < cols; x0 += 23, n++) {
+      const y = n % 2 === 0 ? 1 : 0
+      for (let i = 1; i < 4; i++) px(x0 + i, y, COLOR.star)
+      for (let i = 0; i < 6; i++) px(x0 + i, y + 1, COLOR.star)
+    }
   }
 
   const beat = (s.t >> 3) & 1
@@ -188,8 +203,8 @@ export const paintScene = (s: Scene, view: View, cols: number) => {
 const UPPER_HALF = 0x2580
 
 /** RasterProps `cells`: an upper half block per cell, its foreground the upper pixel. */
-export const sceneCells = (s: Scene, view: View, cols: number) => {
-  const p = paintScene(s, view, cols)
+export const sceneCells = (s: Scene, view: View, cols: number, scheme: Scheme = 'dark') => {
+  const p = paintScene(s, view, cols, scheme)
   const words = new Uint32Array(cols * ROWS * 3)
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < cols; c++) {
@@ -310,6 +325,7 @@ export const report = (x: Save) => {
     ...SKILLS.map(id => `  /rpg 스킬 ${SKILL_NAMES[id]}: ${SKILL_HELP[id]}`),
     '  /rpg 전직 [근접|마법|원거리|암살]: Lv.10·30·60부터 전직 시험 신청 (인턴은 계열을 골라요)',
     `  /rpg 계열 <이름>: 같은 차수에서 계열 바꾸기 (다음 강화 20번 값, 지금 ${amount(lineChangeCost(x))}골드)`,
+    `  /rpg 테마 [시스템|다크|라이트]: 사냥터 색 (지금 ${THEME_NAMES[theme]})`,
     '  /rpg 끄기 · /rpg 켜기: 띠 숨기기 · 다시 보이기 (꺼도 사냥은 계속돼요)',
   ].join('\n')
 }
@@ -329,6 +345,45 @@ let lastAt = 0
 let spare = 0 // elapsed time short of one attack
 let pace = 1500 // the save's last auto-attack interval: only says when there may be one to make
 let saving: Promise<unknown> = Promise.resolve()
+
+// --- The theme: the person's setting, kept in the store; `system` follows macOS's appearance.
+
+const THEMES = ['system', 'dark', 'light'] as const
+type Theme = (typeof THEMES)[number]
+const THEME_NAMES: Record<Theme, string> = { system: '시스템', dark: '다크', light: '라이트' }
+const SYSTEM_MS = 30_000
+let theme: Theme = 'system'
+let systemDark = true
+let systemAt = -Infinity
+
+const scheme = (): Scheme => (theme === 'system' ? (systemDark ? 'dark' : 'light') : theme)
+
+/** Asks macOS at most every SYSTEM_MS, never waited on: a change redraws. No answer reads dark. */
+const checkSystem = ($: EngineInterface, now: number) => {
+  if (theme !== 'system' || now - systemAt < SYSTEM_MS) return
+  systemAt = now
+  const seen = (dark: boolean) => {
+    if (dark === systemDark) return
+    systemDark = dark
+    $.ui.invalidate('ui.render')
+  }
+  // Light mode has no AppleInterfaceStyle at all: the read fails with nothing on stdout.
+  $.process.run(['defaults', 'read', '-g', 'AppleInterfaceStyle'], { timeoutMs: 2000 }).then(
+    r => seen(r.stdout.trim() === 'Dark'),
+    () => seen(true),
+  )
+}
+
+const setTheme = async ($: EngineInterface, name: string) => {
+  const next = THEMES.find(t => THEME_NAMES[t] === name || t === name) ?? (name ? undefined : THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length])
+  if (!next) return `테마는 ${THEMES.map(t => THEME_NAMES[t]).join(', ')} 중에서 골라 주세요.`
+  theme = next
+  systemAt = -Infinity
+  checkSystem($, await $.clock.now())
+  await $.store.set('theme', next)
+  $.ui.invalidate('ui.render')
+  return `테마: ${THEME_NAMES[next]}${next === 'system' ? ' (macOS 화면 모드를 따라가요)' : ''}`
+}
 
 /**
  * What a move of this session's own made happen, a line per kind at most: a catch-up of hundreds
@@ -439,10 +494,11 @@ const RETRY_MS = 500
 const frame = async ($: EngineInterface) => {
   const mine = anim
   await advance($)
+  checkSystem($, lastAt)
   const x = await read($, save)
   // A slow tick plays a few frames at once: the swing, the flash and the number still read.
   for (let i = animFast ? 1 : IDLE_STEPS; i > 0; i--) stepScene(scene, animFast ? 1 : 2)
-  const shown = await $.ui.blit({ requestId: band, key: RASTER, cells: sceneCells(scene, viewOf(scene, x), cols) })
+  const shown = await $.ui.blit({ requestId: band, key: RASTER, cells: sceneCells(scene, viewOf(scene, x), cols, scheme()) })
   // An old frame still in flight has no say over the timer that replaced it.
   if (anim !== mine) return
   if (!shown.deny) {
@@ -508,6 +564,7 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
     return report(await read($, save))
   }
   if (verb === '끄기' || verb === '켜기') return setOn($, verb === '켜기')
+  if (verb === '테마') return setTheme($, arg)
   if (verb === '강화') {
     const before = (await read($, save)).enhance
     return settle(await buy($, x => enhance(x, arg === '최대')), x => {
@@ -571,8 +628,12 @@ export const register: Register = on => {
     await $.command.register({
       name: 'rpg',
       description: '방치형 RPG: 상태·메뉴 보기, 강화, 뽑기, 스킬, 전직',
-      argumentHint: '[강화 [최대] | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 끄기 | 켜기]',
+      argumentHint: '[강화 [최대] | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 끄기 | 켜기]',
     })
+    const kept = await $.store.get('theme')
+    theme = THEMES.find(t => t === kept) ?? 'system'
+    systemAt = -Infinity
+    checkSystem($, await $.clock.now())
     const stored = await $.store.get('on')
     await update($, meta, m => ({ ...m, on: stored !== false }))
     // A reload comes here again mid-session: the bill it already holds is the one to count from.
@@ -649,7 +710,10 @@ export const register: Register = on => {
         <Box columnGap={2} flexWrap="wrap">
           {jobRow()}
         </Box>
-        <Text dimColor>Esc 닫기</Text>
+        <Box columnGap={2}>
+          {key('t', `테마: ${THEME_NAMES[theme]}`, '테마')}
+          <Text dimColor>시스템 → 다크 → 라이트 · Esc 닫기</Text>
+        </Box>
         {note !== '' && <Text dimColor>{note}</Text>}
       </Box>
     )
@@ -755,7 +819,7 @@ export const register: Register = on => {
     const { Raster } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
-        <Raster key={RASTER} columns={cols} rows={ROWS} cells={sceneCells(scene, viewOf(scene, x), cols)} />
+        <Raster key={RASTER} columns={cols} rows={ROWS} cells={sceneCells(scene, viewOf(scene, x), cols, scheme())} />
         {line}
       </Box>
     )

@@ -4,7 +4,7 @@ import type { On } from 'claude-code'
 import type { IdleRpgSave as Save } from '../types'
 import { apply, fresh, join, levelOf, parseSave, stageOf } from './game'
 import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene } from './register'
-import { MOBS, SCENE } from './sprites'
+import { DAY_PALETTE, DAY_SCENE, MOBS, SCENE } from './sprites'
 
 const BAND = {
   plugin: 'idle-rpg',
@@ -26,7 +26,14 @@ const engine = (on: On, store: Record<string, unknown> = {}) => {
     onSet: undefined as ((key: string) => void) | undefined,
     toasts: [] as string[],
     panes: [] as string[],
+    /** What `defaults read -g AppleInterfaceStyle` prints; undefined: the run fails. */
+    appearance: undefined as string | undefined,
   }
+  on('process.run', () => {
+    if (world.appearance === undefined) throw new Error('ENOENT: defaults')
+    const dark = world.appearance === 'Dark'
+    return { value: { exitCode: dark ? 0 : 1, stdout: dark ? 'Dark\n' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   on('ui.open', (_, e) => {
     if (!world.panes.includes(e.id)) world.panes.push(e.id)
     return { value: { isPlaced: true } }
@@ -563,4 +570,75 @@ test('the band has a menu button that opens and closes the pane, and says when �
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(rowsOf(await ui.drawn())).toBe(6)
   await ui.unmount()
+})
+
+const hexOf = (hex: string) => Number.parseInt(hex.slice(1), 16)
+/** WCAG relative luminance of a 0xRRGGBB color, and the contrast of two. */
+const luminance = (c: number) => {
+  const lin = (v: number) => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4)
+  return 0.2126 * lin((c >> 16) & 255) + 0.7152 * lin((c >> 8) & 255) + 0.0722 * lin(c & 255)
+}
+const contrast = (a: number, b: number) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number]
+  return (hi + 0.05) / (lo + 0.05)
+}
+/** The sky color of the field a mounted band draws: the second cell's upper pixel (the first holds a star). */
+const skyOf = async (ui: any) => {
+  const raster = await ui.find({ type: 'Raster' })
+  const words = new Uint32Array(Uint8Array.from(atob(raster.props.cells), ch => ch.charCodeAt(0)).buffer)
+  return words[4]
+}
+
+test('the day scheme draws in dark ink what the night draws white: no white on a light sky', () => {
+  const sky = hexOf(DAY_SCENE.sky)
+  for (const hex of [DAY_SCENE.flash, DAY_SCENE.damage, DAY_SCENE.crit, ...Object.values(DAY_PALETTE)]) {
+    expect(contrast(hexOf(hex), sky)).toBeGreaterThanOrEqual(3)
+  }
+  // A frame mid-hit, the monster flashing and a crit and a plain number floating.
+  const scene = newScene()
+  scene.queue.push({ dmg: 12, crit: true, killed: false, boss: false, advanced: false })
+  for (let i = 0; i < 3; i++) stepScene(scene)
+  scene.floats.push({ text: '345', crit: false, y: 3, life: 5 })
+  const view = { kills: 3, boss: false, left: 0.5 } // the memory leak blob, light blue at night
+  const day = paintScene(scene, view, 72, 'light')
+  const night = paintScene(scene, view, 72)
+  expect(day.filter(c => c === hexOf(DAY_SCENE.flash)).length).toBeGreaterThan(20)
+  expect(night.filter(c => c === hexOf(SCENE.flash)).length).toBeGreaterThan(20)
+  // Clouds are the day's only near-white, and the sky and clouds are all that is left of the night's.
+  const pale = [...new Set(day)].filter(c => luminance(c) > 0.75)
+  expect(pale).toEqual([hexOf(DAY_SCENE.star)])
+  expect(day.includes(hexOf(SCENE.sky))).toBe(false)
+  expect(day.includes(hexOf(SCENE.damage)) || day.includes(hexOf(SCENE.flash))).toBe(false)
+})
+
+test('/rpg 테마 picks the scheme, the store keeps it, and 시스템 follows macOS', async ($, on) => {
+  mock.clock(on, { now: NOON })
+  const world = engine(on)
+  world.appearance = '' // light mode: the key is absent
+  await start($)
+  const field = async () => {
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    const sky = await skyOf(ui)
+    await ui.unmount()
+    return sky
+  }
+  expect(await field()).toBe(hexOf(DAY_SCENE.sky))
+
+  expect(await rpg($, '테마 다크')).toContain('테마: 다크')
+  expect(world.store.theme).toBe('dark')
+  expect(await field()).toBe(hexOf(SCENE.sky))
+  expect(await rpg($, '테마')).toContain('테마: 라이트') // no name: the next in the cycle
+  expect(await field()).toBe(hexOf(DAY_SCENE.sky))
+  expect(await rpg($, '테마 보라')).toContain('시스템, 다크, 라이트')
+
+  // A new session reads the setting back; 시스템 asks again, and a failed ask is dark.
+  world.appearance = 'Dark'
+  await start($)
+  expect(await field()).toBe(hexOf(DAY_SCENE.sky))
+  await rpg($, '테마 시스템')
+  expect(await field()).toBe(hexOf(SCENE.sky))
+  world.appearance = undefined
+  await rpg($, '테마 라이트')
+  await rpg($, '테마 시스템')
+  expect(await field()).toBe(hexOf(SCENE.sky))
 })
