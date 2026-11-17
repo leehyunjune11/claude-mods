@@ -13,6 +13,8 @@ const BAND = {
 } as const
 
 const NOON = new Date(2026, 10, 16, 12, 0).getTime()
+/** The day's missions, all paid already: a store with it pays none, for tests about something else. */
+const DONE_TODAY = { daily: { day: '2026-11-16', from: { stage: 1, enhance: 0, level: 1 }, paid: ['stage', 'enhance', 'level'] } }
 
 /** Stands for the engine beneath: `world.usd` and `world.store` move as the test moves them. */
 const engine = (on: On, store: Record<string, unknown> = {}) => {
@@ -303,7 +305,7 @@ test('a new session takes up the monster where the last one left it', async ($, 
 
 test('two sessions hunting side by side stay at the stage they fought to, and both are paid', async ($, on) => {
   const clock = mock.clock(on, { now: NOON })
-  const world = engine(on)
+  const world = engine(on, DONE_TODAY)
   await start($)
   await clock.advance(3_600_000)
 
@@ -476,7 +478,7 @@ test('a hit swings, flashes the monster white, floats its damage, and a kill wal
 
 test('a long catch-up toasts each kind of news once, and a rescan that raises the level stays quiet', async ($, on) => {
   const clock = mock.clock(on, { now: NOON })
-  const world = engine(on)
+  const world = engine(on, DONE_TODAY)
   await start($)
 
   await clock.advance(8 * 3_600_000)
@@ -688,7 +690,7 @@ const tasks = (...list: { id: string; xp?: number; done?: boolean }[]) =>
 
 test('a finished to-do pays once, for good, from the start, a turn end or the timer', async ($, on) => {
   const clock = mock.clock(on, { now: NOON })
-  const world = engine(on, { save: stored({ exp: 300, kills: 25 }) })
+  const world = engine(on, { ...DONE_TODAY, save: stored({ exp: 300, kills: 25 }) })
   world.files[TASKS] = tasks({ id: 'deck', xp: 150, done: true }, { id: 'mail', done: true }, { id: 'call', xp: 40 })
   await start($)
 
@@ -995,4 +997,33 @@ test('every 25 stages is a new zone, with its own monsters and sky, and the move
   await clock.advance(60_000)
   await endTurn($)
   expect(world.toasts.filter(t => t.startsWith('새 지역'))).toEqual(['새 지역: 스파게티 늪! 스테이지 26~50'])
+})
+
+test("the day's missions count from where the day began, each pays once, and all three pay a bonus", async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on, { save: stored({ kills: 210, exp: 6802 }) })
+  await start($)
+  expect(world.store.daily).toEqual({ day: '2026-11-16', from: { stage: 22, enhance: 0, level: 10 }, paid: [] })
+
+  // Ten 강화 bought: that one is done, and paid at the next check.
+  world.store['s:sess-b'] = { ...stored({ enhance: 10 }), kills: 0 }
+  await rpg($)
+  await endTurn($)
+  expect(world.store.daily.paid).toEqual(['enhance'])
+  expect(world.toasts.filter(t => t.startsWith('오늘의 미션'))).toEqual([expect.stringMatching(/^오늘의 미션 완료: 강화 10! 골드 \+/)])
+  await endTurn($)
+  expect(world.toasts.filter(t => t.startsWith('오늘의 미션'))).toHaveLength(1)
+
+  // Five stages and a level: the last two, and the bonus.
+  world.store['s:sess-c'] = { ...stored({ kills: 270, exp: 20_000 }) }
+  await rpg($)
+  await endTurn($)
+  expect(world.store.daily.paid.sort()).toEqual(['enhance', 'level', 'stage'])
+  expect(world.toasts.filter(t => t.startsWith('오늘의 미션 모두 완료'))).toHaveLength(1)
+
+  // A new day starts from where it stands as the timer first sees it: what comes after counts anew.
+  await clock.advance(24 * 3_600_000)
+  await endTurn($)
+  expect(world.store.daily).toMatchObject({ day: '2026-11-17', from: { enhance: 10 } })
+  expect(world.store.daily.paid).not.toContain('enhance')
 })

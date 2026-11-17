@@ -43,6 +43,11 @@ import {
   lineChangeCost,
   mobIndex,
   zoneOf,
+  MISSIONS,
+  dayStart,
+  missionBonus,
+  missionProgress,
+  missionReward,
   forgeOf,
   ZONE_STAGES,
   ZONES,
@@ -54,7 +59,7 @@ import {
   total,
   trait,
 } from './game'
-import type { GameEvent, Hit, Purchase } from './game'
+import type { DayStart, GameEvent, Hit, Purchase } from './game'
 import {
   BIG_BOSS,
   BIG_BOSS_STEP,
@@ -472,6 +477,7 @@ export const report = (x: Save) => {
     `스테이지 ${stageLabel(x)} (${zoneName(x)}) · 상대: ${foe(x)}${bossWait(x) && ` · ${bossWait(x)}`}`,
     `골드 ${amount(x.gold)} · 공격력 ${amount(attack(x))} · 강화 +${x.enhance}`,
     `장비: ${gear.join(' · ')}`,
+    ...(missionLine(x) ? [`오늘의 미션: ${missionLine(x)}`] : []),
     `스킬 (남은 포인트 ${skillPoints(x)}): ${SKILLS.map(id => `${SKILL_NAMES[id]} ${x.skills[id]}/${MAX_SKILL}`).join(' · ')}`,
     `다음 강화: ${amount(enhanceCost(x))}골드 · 뽑기: ${GACHA_COST}골드`,
     '',
@@ -915,9 +921,62 @@ const readQuests = ($: EngineInterface) => {
     $.ui.toast(`퀘스트 ${owed.length}개 완료 보상: 경험치 +${amount(exp)} · 골드 +${amount(gold)}`)
     await sync($, false)
   }
+  const both = async () => {
+    await run()
+    await checkDaily($)
+  }
   // The start, each turn's end and the timer all come here: one read at a time.
-  questing = questing.then(run, run)
+  questing = questing.then(both, both)
   return questing.catch(() => {})
+}
+
+// --- 오늘의 미션: the day's start and what is paid, in the store under DAILY; checked with the quests.
+// ponytail: as quest rewards, two sessions checking in the same instant can both pay a mission.
+
+const DAILY = 'daily'
+type Daily = { day: string; from: DayStart; paid: string[] }
+let daily: Daily | undefined
+
+/** The local date, as the day's key. */
+const dayOf = (now: number) => {
+  const d = new Date(now)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+const parseDaily = (raw: unknown): Daily | undefined => {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const { day, from, paid } = raw as Record<string, unknown>
+  const at = from as Record<string, unknown> | null
+  if (typeof day !== 'string' || !Array.isArray(paid) || typeof at !== 'object' || at === null) return undefined
+  if (![at.stage, at.enhance, at.level].every(n => typeof n === 'number')) return undefined
+  return { day, from: at as DayStart, paid: paid.filter((id): id is string => typeof id === 'string') }
+}
+
+/** The day's missions as the pane and the report write them. */
+const missionLine = (x: Save) => {
+  if (!daily) return ''
+  const d = daily
+  return MISSIONS.map(m => `${d.paid.includes(m.id) ? '✓' : ''}${m.name} ${missionProgress(m.id, x, d.from)}/${m.need}`).join(' · ')
+}
+
+const checkDaily = async ($: EngineInterface) => {
+  const day = dayOf(await $.clock.now())
+  const x = await read($, save)
+  const kept = parseDaily(await $.store.get(DAILY))
+  const d = kept?.day === day ? kept : { day, from: dayStart(x), paid: [] }
+  if (d !== kept) await $.store.set(DAILY, d)
+  daily = d
+  const done = MISSIONS.filter(m => !d.paid.includes(m.id) && missionProgress(m.id, x, d.from) >= m.need)
+  if (done.length === 0) return
+  const all = d.paid.length + done.length === MISSIONS.length
+  daily = { ...d, paid: [...d.paid, ...done.map(m => m.id)] }
+  await $.store.set(DAILY, daily)
+  const gold = missionReward(x) * done.length + (all ? missionBonus(x) : 0)
+  await play($, { type: 'reward', exp: 0, gold })
+  for (const m of done) $.ui.toast(`오늘의 미션 완료: ${m.name} ${m.need}! 골드 +${amount(missionReward(x))}`)
+  if (all) $.ui.toast(`오늘의 미션 모두 완료! 보너스 골드 +${amount(missionBonus(x))}`)
+  await sync($, false)
+  $.ui.invalidate('ui.render')
 }
 
 /** Advance, read the other rows in, then the command: what /rpg and every pane press go through. */
@@ -1037,6 +1096,7 @@ export const register: Register = on => {
           골드 {amount(x.gold)} · 공격력 {amount(attack(x))} · 강화 +{x.enhance}
           {canApply(x) && <Text color={SCENE.crit}> · 전직 가능</Text>}
         </Text>
+        {missionLine(x) !== '' && <Text>오늘의 미션: {missionLine(x)}</Text>}
         <Text>장비: {SLOTS.map(slot => `${SLOT_NAMES[slot]} ${RARITY_NAMES[x.gear[slot]]}${stars(x, slot)}`).join(' · ')}</Text>
         <Box columnGap={2} flexWrap="wrap">
           {key('e', `강화 (${amount(enhanceCost(x))}골드)`, '강화')}

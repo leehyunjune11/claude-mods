@@ -203,6 +203,33 @@ export const questReward = (save: Save, xp: number) => ({
   gold: Math.round(MOB_GOLD * stageReward(save) * (xp / 2) * trait(save, 'gold') * gearMult(save, 'armor')),
 })
 
+// --- 오늘의 미션: three goals a day, each counted from where the save stood when the day began.
+
+/** Where the save stood as the day began. */
+export type DayStart = { stage: number; enhance: number; level: number }
+export const MISSIONS = [
+  { id: 'stage', name: '스테이지', need: 5 },
+  { id: 'enhance', name: '강화', need: 10 },
+  { id: 'level', name: '레벨', need: 1 },
+] as const
+export type MissionId = (typeof MISSIONS)[number]['id']
+/** A mission pays this many of the stage's plain monsters' gold; all three, this many again. */
+const MISSION_KILLS = 300
+const MISSION_BONUS = 3
+
+export const dayStart = (save: Save): DayStart => ({ stage: stageOf(save.kills), enhance: save.enhance, level: levelOf(save.exp) })
+
+/** How far a mission is, from the day's start: never below 0, nor past its need. */
+export const missionProgress = (id: MissionId, save: Save, from: DayStart) => {
+  const now = dayStart(save)
+  const need = MISSIONS.find(m => m.id === id)?.need ?? 0
+  return Math.min(need, Math.max(0, now[id] - from[id]))
+}
+
+/** What a mission pays, and what all three done pay on top. */
+export const missionReward = (save: Save) => Math.round(MOB_GOLD * stageReward(save) * MISSION_KILLS * trait(save, 'gold') * gearMult(save, 'armor'))
+export const missionBonus = (save: Save) => missionReward(save) * MISSION_BONUS
+
 const costAt = (enhance: number) => Math.round(50 * ENHANCE_COST ** enhance)
 export const enhanceCost = (save: Save) => costAt(save.enhance)
 /** What a 계열 변경 costs: the next LINE_CHANGE_ENHANCES 강화 together. */
