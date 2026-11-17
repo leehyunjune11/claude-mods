@@ -4,7 +4,7 @@ import type { On } from 'claude-code'
 import type { IdleRpgSave as Save } from '../types'
 import { apply, fresh, join, levelOf, parseSave, questReward, stageOf } from './game'
 import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene } from './register'
-import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, SCENE } from './sprites'
+import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, PALETTE, SCENE } from './sprites'
 
 const BAND = {
   plugin: 'idle-rpg',
@@ -720,4 +720,14 @@ test('a missing or broken quest file pays nothing and says nothing', async ($, o
   expect(world.toasts).toEqual([])
   // What it has is the half minute of hunting, and nothing more.
   expect(saved(world)).toEqual(apply(fresh(), { type: 'tick', ms: 30_000 }, () => 0.99).save)
+})
+
+test('sprites are ringed in the outline color, and the ring leaves the ground alone', () => {
+  const cols = 60
+  const ink = hexOf(PALETTE.K ?? '')
+  const p = paintScene(newScene(), { kills: 0, boss: false, left: 1 }, cols, 'light')
+  const row = (y: number) => [...p.slice(y * cols, (y + 1) * cols)]
+  // Above the ground the outline rings the hero and the monster; on it, only the bar and grass.
+  expect(row(8).filter(c => c === ink).length).toBeGreaterThan(4)
+  expect(row(9).filter(c => c === ink).length).toBe(0)
 })

@@ -174,7 +174,22 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
     const b = Math.round(y)
     if (a >= 0 && a < cols && b >= 0 && b < H) p[b * cols + a] = c
   }
-  const sprite = (rows: readonly string[], sx: number, sy: number, ink?: number) => {
+  /**
+   * Draws a sprite, ringed in the outline color first unless `ring` is off. Letters in `bare` (an
+   * attack's slash) are drawn but not ringed, and the ring never covers the ground.
+   */
+  const sprite = (rows: readonly string[], sx: number, sy: number, ink?: number, ring = true, bare = '') => {
+    const solid = (i: number, j: number) => {
+      const c = rows[j]?.[i]
+      return c !== undefined && c !== '.' && !bare.includes(c)
+    }
+    const wide = rows[0]?.length ?? 0
+    for (let j = -1; ring && j <= rows.length; j++) {
+      for (let i = -1; i <= wide; i++) {
+        const near = solid(i - 1, j) || solid(i + 1, j) || solid(i, j - 1) || solid(i, j + 1)
+        if (!solid(i, j) && near && sy + j < GROUND) px(sx + i, sy + j, PAL.K)
+      }
+    }
     rows.forEach((row, j) => {
       ;[...row].forEach((c, i) => {
         const color = c === '.' ? undefined : (ink ?? PAL[c])
@@ -198,7 +213,7 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
 
   const beat = (s.t >> 3) & 1
   const hero = s.swing > IMPACT ? art?.swing[0] : s.cur ? art?.swing[1] : art?.idle[beat]
-  if (hero) sprite(hero, HERO_X, GROUND - hero.length)
+  if (hero) sprite(hero, HERO_X, GROUND - hero.length, undefined, true, 'C')
 
   const mob = view.exam ? EXAMINER : view.boss ? BOSS : (MOBS[mobIndex(view.kills)] ?? BOSS)
   const wide = mob[0]?.length ?? 0
@@ -212,7 +227,7 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
 
   s.floats.forEach((f, n) => {
     ;[...f.text].forEach((digit, i) => {
-      sprite(FONT[digit] ?? [], MOB_X + wide + 2 + i * 4 + n * 2, f.y, f.crit ? COLOR.crit : COLOR.damage)
+      sprite(FONT[digit] ?? [], MOB_X + wide + 2 + i * 4 + n * 2, f.y, f.crit ? COLOR.crit : COLOR.damage, false)
     })
   })
   return p
