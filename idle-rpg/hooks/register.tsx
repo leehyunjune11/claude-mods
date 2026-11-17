@@ -358,6 +358,13 @@ const nextTierLevel = (x: Save) => {
 const canApply = (x: Save) => levelOf(x.exp) >= (nextTierLevel(x) ?? Infinity)
 
 /** While a 전직 시험 waits on attack, what it asks for. */
+/** The band's word on a pending trial: how near the attack is to calling the examiner, or that it is up. */
+export const trialTag = (x: Save) => {
+  const need = examNeed(x)
+  if (need === 0) return ''
+  return foeOf(x).exam ? '[전직 시험 중]' : `[시험 공격력 ${amount(attack(x))}/${amount(need)}]`
+}
+
 const examWait = (x: Save) => {
   const need = examNeed(x)
   return need > 0 && !foeOf(x).exam ? `시험관은 공격력 ${amount(need)}부터` : ''
@@ -954,6 +961,12 @@ export const register: Register = on => {
           <Text bold color={SCENE.crit}>
             {' '}
             [전직 가능]
+          </Text>
+        )}
+        {trialTag(x) !== '' && (
+          <Text bold color={SCENE.crit}>
+            {' '}
+            {trialTag(x)}
           </Text>
         )}
         <Text color="#5fd38a"> {expBar(x)}</Text>

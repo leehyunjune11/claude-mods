@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 
 import type { IdleRpgSave as Save } from '../types'
 import { apply, fresh, join, levelOf, parseSave, questReward, stageOf } from './game'
-import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene } from './register'
+import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene, trialTag } from './register'
 import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, PALETTE, SCENE } from './sprites'
 
 const BAND = {
@@ -823,5 +823,19 @@ test('with 크게 the frames between drawings are painted 크게 too', async ($,
   expect(world.blits).toBeGreaterThan(blits)
   // Three 32-bit words a cell: the glyph and its two colors.
   expect(atob(world.blitCells).length).toBe(72 * 9 * 3 * 4)
+  await ui.unmount()
+})
+
+test('a pending trial says on the band how near the attack is, then that the examiner is up', async ($, on) => {
+  mock.clock(on, { now: NOON })
+  const trial = (hp: number) => ({ ...stored({ exp: 6802 }), job: { line: null, tier: 0 as const, at: 1, trial: { line: 'rogue' as const, hp } } })
+  // 19394 hp over 40 tries: the examiner comes at attack 485; Lv.10's bare attack is 28.
+  expect(trialTag(parseSave(trial(19394)) as Save)).toBe('[시험 공격력 28/485]')
+  expect(trialTag(parseSave(trial(600)) as Save)).toBe('[전직 시험 중]')
+  expect(trialTag(parseSave(stored({ exp: 6802 })) as Save)).toBe('')
+  const world = engine(on, { save: trial(19394) })
+  await start($)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /Lv\./ }))?.text).toContain('[시험 공격력 28/485]')
   await ui.unmount()
 })
