@@ -43,7 +43,26 @@ export const SLOT_NAMES: Record<Slot, string> = { weapon: '무기', armor: '갑�
 export const SLOT_EFFECTS: Record<Slot, string> = { weapon: '공격력', armor: '골드', ring: '경험치' }
 export const RARITY_NAMES = ['없음', '일반', '희귀', '영웅', '전설'] as const
 export const SKILL_NAMES: Record<SkillId, string> = { flurry: '연속베기', crit: '급소찌르기', greed: '황금손' }
-export const MOB_NAMES = ['세미콜론 벌레', '널 유령', '무한루프 뱀', '메모리 누수 방울'] as const
+export const MOB_NAMES = [
+  '세미콜론 벌레',
+  '널 유령',
+  '무한루프 뱀',
+  '메모리 누수 방울',
+  '스파게티 덩굴',
+  '경고 두꺼비',
+  '타임아웃 박쥐',
+  '길 잃은 구름',
+  '세그폴트 불꽃',
+  '데드락 바위게',
+] as const
+/** Stages to a zone: each has its own monsters (MOB_NAMES's) and sky; past the last they come round. */
+export const ZONE_STAGES = 25
+export const ZONES = [
+  { name: '레거시 숲', mobs: [0, 1, 2, 3] },
+  { name: '스파게티 늪', mobs: [4, 5, 3] },
+  { name: '클라우드 고원', mobs: [6, 7, 1] },
+  { name: '커널 화산', mobs: [8, 9, 2] },
+] as const
 export const BOSS_NAME = '레거시 골렘'
 export const EXAM_NAME = '전직 시험관'
 export const INTERN = '인턴'
@@ -127,8 +146,13 @@ export const levelInfo = (exp: number) => {
 export const levelOf = (exp: number) => levelInfo(exp).level
 export const stageOf = (kills: number) => Math.floor(kills / KILLS_PER_STAGE) + 1
 export const isBoss = (kills: number) => kills % KILLS_PER_STAGE === KILLS_PER_STAGE - 1
-/** Which of MOB_NAMES (and of the sprites) stands at this kill count, bosses aside. */
-export const mobIndex = (kills: number) => (stageOf(kills) - 1 + (kills % KILLS_PER_STAGE)) % MOB_NAMES.length
+/** Which of ZONES the hero is in at this kill count. */
+export const zoneOf = (kills: number) => Math.floor((stageOf(kills) - 1) / ZONE_STAGES) % ZONES.length
+/** Which of MOB_NAMES (and of the sprites) stands at this kill count, bosses aside: the zone's, in turn. */
+export const mobIndex = (kills: number) => {
+  const { mobs } = ZONES[zoneOf(kills)] ?? ZONES[0]
+  return mobs[(stageOf(kills) - 1 + (kills % KILLS_PER_STAGE)) % mobs.length] ?? 0
+}
 
 export const gearMult = (save: Save, slot: Slot) => GEAR_MULT[slot][save.gear[slot]] ?? 1
 export const attack = (save: Save) =>

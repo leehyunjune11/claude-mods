@@ -37,6 +37,18 @@ export const PALETTE: Record<string, string> = {
   Q: '#b0302a', // cape (2차 up)
   X: '#f2c230', // crown, aura (3차)
   k: '#3a2a2a', // boots (the big scene)
+  E: '#f0d070', // noodle
+  e: '#b08a30', // noodle, shaded
+  L: '#e8c030', // toad
+  l: '#9a7a10', // toad, shaded
+  V: '#7a5ab0', // bat
+  v: '#45306a', // bat, shaded
+  U: '#b8c4d8', // cloud
+  u: '#7a8aa8', // cloud, shaded
+  Z: '#ff7a2a', // flame
+  z: '#c03a1a', // flame, shaded
+  J: '#c0604a', // crab
+  j: '#7a3a2a', // crab, shaded
 }
 
 /** The night scheme, the one drawn on a dark terminal. `star` dots its sky. */
@@ -392,7 +404,7 @@ export const EXAMINER = [
   '...pp..pp...',
 ]
 
-/** The four ordinary monsters, in the order game.ts names them. */
+/** The ordinary monsters, in the order game.ts names them (MOB_NAMES). */
 export const MOBS = [
   // 세미콜론 벌레
   [
@@ -436,6 +448,66 @@ export const MOBS = [
     '.CCCCCCc..',
     '..ccccc...',
     '.c...c..c.',
+  ],
+  [
+    '...E.EE...',
+    '..E.E..E..',
+    '.EWKEEWKE.',
+    'E.EEEEEEE.',
+    '.ERReEEeE.',
+    'E.RReEEeE.',
+    '.e.E.e.E.e',
+    'e..e..e..e',
+  ],
+  [
+    '..........',
+    '..LL..LL..',
+    '.LKWLLKWL.',
+    'LLLLLLLLLL',
+    'LKLKLKLKLL',
+    'lLLLLLLLLl',
+    '.lLLllLLl.',
+    'll......ll',
+  ],
+  [
+    '............',
+    'V..........V',
+    'VV..vVVv..VV',
+    'VVVvVRVRvVVV',
+    '.VVVVVVVVVV.',
+    '..V.vVVv.V..',
+    '.....vv.....',
+    '............',
+  ],
+  [
+    '............',
+    '....UUU.....',
+    '..UUUUUUU...',
+    '.UUKUUKUUUU.',
+    'UUUUUUUUUUUU',
+    'UUUUuuuUUUUU',
+    '.uuuuuuuuuu.',
+    '..u...u...u.',
+  ],
+  [
+    '....Z....',
+    '...ZZ..Z.',
+    '..ZZYZ.Z.',
+    '.ZZYYZZZ.',
+    '.ZYKYKYZ.',
+    'ZZYYYYYZZ',
+    'ZzYYYYYzZ',
+    '.zzzzzzz.',
+  ],
+  [
+    '............',
+    'JJ........JJ',
+    'J.J......J.J',
+    '.JJ.KJJK.JJ.',
+    '..JJJJJJJJ..',
+    '.JjYJJJJYjJ.',
+    '.jJJJJJJJJj.',
+    'j.j.j..j.j.j',
   ],
 ]
 
@@ -493,6 +565,66 @@ export const MOB_STEPS = [
     '.cccccc...',
     '..c...c..c',
   ],
+  [
+    '....EE.E..',
+    '..E..EE.E.',
+    '.EWKEEWKE.',
+    '.EEEEEEEE.',
+    'E.RReEEeE.',
+    '.ERReEEeE.',
+    'e.E.e.E.e.',
+    '.e..e..e..',
+  ],
+  [
+    '..LL..LL..',
+    '.LKWLLKWL.',
+    'LLLLLLLLLL',
+    'LKLKLKLKLL',
+    'lLLLLLLLLl',
+    '.lLLRRLLl.',
+    '.l......l.',
+    'l........l',
+  ],
+  [
+    'VV........VV',
+    '.VV......VV.',
+    '..VVvVVvVV..',
+    '...vVRVRv...',
+    '...VVVVVV...',
+    '....vVVv....',
+    '.....vv.....',
+    '............',
+  ],
+  [
+    '.....UUU....',
+    '...UUUUUUU..',
+    '.UUUUUUUUUU.',
+    '.UUKUUKUUUU.',
+    'UUUUUUUUUUUU',
+    'UUUUuuuUUUUU',
+    '.uuuuuuuuuu.',
+    '...u...u....',
+  ],
+  [
+    '...Z..Z..',
+    '..ZZ.ZZ..',
+    '..ZYZZZ..',
+    '.ZZYYYZZ.',
+    '.ZYKYKYZ.',
+    'ZZYYYYYZZ',
+    'ZzYYYYYzZ',
+    '.zzzzzzz.',
+  ],
+  [
+    '.J........J.',
+    'JJJ......JJJ',
+    '.J.J....J.J.',
+    '..J.KJJK.J..',
+    '..JJJJJJJJ..',
+    '.JjYJJJJYjJ.',
+    '.jJJJJJJJJj.',
+    '.j.j.jj.j.j.',
+  ],
 ]
 
 /** The golem's second frame: its fists up. */
@@ -517,6 +649,12 @@ export const TINTS: Record<string, string>[][] = [
   [{}, { P: '#5fc7a0', p: '#2f8a6a' }, { P: '#f09ac0', p: '#b04a7a' }, { P: '#9aa4b4', p: '#5a6274' }],
   [{}, { O: '#6fd36a', o: '#2f8f4e' }, { O: '#c07ae0', o: '#7a3a9a' }, { O: '#e0c040', o: '#9a7a1c' }],
   [{}, { C: '#ff9d3c', c: '#b85f1a' }, { C: '#ff7ae0', c: '#a03a8a' }, { C: '#7fd06a', c: '#3f8a3a' }],
+  [{}, { E: '#e8a050', e: '#a0602a' }, { E: '#d8e070', e: '#8a9a2a' }, { E: '#f0b0a0', e: '#b05a4a' }],
+  [{}, { L: '#7fd06a', l: '#3f8a3a' }, { L: '#ff9d3c', l: '#b85f1a' }, { L: '#5ab0e0', l: '#2f6a9a' }],
+  [{}, { V: '#5a7ab0', v: '#2f456a' }, { V: '#b05a7a', v: '#6a2f45' }, { V: '#6a6a6a', v: '#3a3a3a' }],
+  [{}, { U: '#c8b8d8', u: '#8a7aa8' }, { U: '#b8d8c8', u: '#7aa88a' }, { U: '#d8c8b8', u: '#a88a7a' }],
+  [{}, { Z: '#5ab0ff', z: '#2a5ac0' }, { Z: '#c07aff', z: '#7a3ac0' }, { Z: '#7fd06a', z: '#3f8a3a' }],
+  [{}, { J: '#6a86a6', j: '#3a4a60' }, { J: '#7f9060', j: '#4a5233' }, { J: '#a07ac0', j: '#5a3a7a' }],
   [{}, { N: '#9a7650', n: '#5a4030' }, { N: '#6a86a6', n: '#3a4a60' }, { N: '#7f9060', n: '#4a5233' }],
 ]
 
@@ -708,3 +846,23 @@ const BOSS_CROWN = ['Y....Y....Y', 'YY..YYY..YY', 'YYYYYRYYYYY'].map(row => `...
 /** The golem twice the size, crowned: its eyes flare gold on the off beat. */
 export const BIG_BOSS = [...BOSS_CROWN, ...scale2(BOSS.slice(2))]
 export const BIG_BOSS_STEP = [...BOSS_CROWN, ...scale2(BOSS.slice(2).map(row => row.replaceAll('R', 'Y')))]
+
+/**
+ * Each zone's sky, hills, trees and ground over the scheme's own (game.ts's ZONES, in order): the
+ * first is the scheme as it stands. The day's clouds stay the one near white.
+ */
+export const ZONE_SCENES: { dark: Partial<typeof SCENE>; light: Partial<typeof SCENE> }[] = [
+  { dark: {}, light: {} },
+  {
+    dark: { sky: '#1b2a26', star: '#3f5a50', hill: '#25382f', tree: '#2f4a30', ground: '#4a4a30' },
+    light: { sky: '#b8d4a8', hill: '#8fb07a', tree: '#5a8a4a', ground: '#8a7a4a' },
+  },
+  {
+    dark: { sky: '#1e2a44', star: '#5a6890', hill: '#2e3d5c', tree: '#2a4a5a', ground: '#5a6478' },
+    light: { sky: '#b6d8f4', hill: '#cfdcec', tree: '#7aa8c0', ground: '#a0b0c0' },
+  },
+  {
+    dark: { sky: '#341c22', star: '#6a3a44', hill: '#442224', tree: '#542a24', ground: '#5a3020' },
+    light: { sky: '#f0c8a8', hill: '#d89a7a', tree: '#a05a3a', ground: '#8a4a2a' },
+  },
+]

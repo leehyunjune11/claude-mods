@@ -2,9 +2,9 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import type { IdleRpgSave as Save } from '../types'
-import { apply, autoAttack, fresh, join, levelOf, parseSave, questReward, stageOf } from './game'
+import { apply, autoAttack, fresh, join, levelOf, mobIndex, parseSave, questReward, stageOf, zoneOf } from './game'
 import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene, trialTag, awayNote } from './register'
-import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, PALETTE, SCENE } from './sprites'
+import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, PALETTE, SCENE, ZONE_SCENES } from './sprites'
 
 const BAND = {
   plugin: 'idle-rpg',
@@ -739,9 +739,10 @@ test('sprites are ringed in the outline color, and the ring leaves the ground al
   expect(row(9).filter(c => c === ink).length).toBe(0)
 })
 
-test('every monster in every stage color, both frames, draws nothing near white on a day sky', () => {
+test('every monster in every stage color and zone, both frames, draws nothing near white on a day sky', () => {
   const cloud = hexOf(DAY_SCENE.star)
-  for (let kills = 0; kills < 60; kills++) {
+  const zones = [0, 1, 2, 3].flatMap(zone => Array.from({ length: 40 }, (_, i) => zone * 250 + i))
+  for (const kills of zones) {
     for (const t of [0, 8]) {
       for (const boss of [false, true]) {
         const scene = newScene()
@@ -968,4 +969,30 @@ test('a seen a few minutes old pays nothing', async ($, on) => {
   await start($)
   expect(world.toasts.filter(t => t.startsWith('세션을 닫아 둔'))).toEqual([])
   expect(saved(world).kills).toBe(0)
+})
+
+test("each zone's day sky keeps the ink readable, and its night sky shows the outline", () => {
+  for (const zone of ZONE_SCENES) {
+    const day = hexOf(zone.light.sky ?? DAY_SCENE.sky)
+    for (const hex of [DAY_SCENE.flash, DAY_SCENE.damage, DAY_SCENE.crit, ...Object.values(DAY_PALETTE)]) {
+      expect(contrast(hexOf(hex), day)).toBeGreaterThanOrEqual(3)
+    }
+    expect(contrast(hexOf(PALETTE.K ?? ''), hexOf(zone.dark.sky ?? SCENE.sky))).toBeGreaterThan(1.1)
+  }
+})
+
+test('every 25 stages is a new zone, with its own monsters and sky, and the move toasts once', async ($, on) => {
+  const at = (stage: number) => (stage - 1) * 10
+  expect([1, 25, 26, 51, 76, 101].map(stage => zoneOf(at(stage)))).toEqual([0, 0, 1, 2, 3, 0])
+  expect(new Set(Array.from({ length: 30 }, (_, i) => mobIndex(at(26) + i)))).toEqual(new Set([4, 5, 3]))
+  const view = (kills: number) => paintScene(newScene(), { kills, boss: false, left: 1 }, 72)[0]
+  expect(view(at(26))).not.toBe(view(at(25)))
+
+  const clock = mock.clock(on, { now: NOON })
+  // The last kill of stage 25 is its boss: an hour of hits fells it, at an attack that can.
+  const world = engine(on, { save: stored({ kills: at(25) + 9, enhance: 60 }) })
+  await start($)
+  await clock.advance(60_000)
+  await endTurn($)
+  expect(world.toasts.filter(t => t.startsWith('새 지역'))).toEqual(['새 지역: 스파게티 늪! 스테이지 26~50'])
 })

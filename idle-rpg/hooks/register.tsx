@@ -42,6 +42,9 @@ import {
   levelOf,
   lineChangeCost,
   mobIndex,
+  zoneOf,
+  ZONE_STAGES,
+  ZONES,
   parseSave,
   questReward,
   share,
@@ -67,6 +70,7 @@ import {
   SCENE,
   SCHEMES,
   TINTS,
+  ZONE_SCENES,
 } from './sprites'
 import type { Scheme } from './sprites'
 
@@ -104,7 +108,11 @@ const QUEUE = 4
 const rgb = (hex: string) => Number.parseInt(hex.slice(1), 16)
 const colors = <T extends Record<string, string>>(hexes: T) =>
   Object.fromEntries(Object.entries(hexes).map(([c, hex]) => [c, rgb(hex)])) as Record<keyof T, number>
-const SCENE_COLORS = { dark: colors(SCHEMES.dark.scene), light: colors(SCHEMES.light.scene) }
+/** Each zone's scene colors in each scheme: the scheme's, the zone's over them. */
+const ZONE_COLORS = ZONE_SCENES.map(zone => ({
+  dark: colors({ ...SCHEMES.dark.scene, ...zone.dark }),
+  light: colors({ ...SCHEMES.light.scene, ...zone.light }),
+}))
 const pals = new Map<string, Record<string, number>>()
 /** A look's palette in a scheme: PALETTE, the look's colors over it, the day's swaps over both. */
 const palOf = (scheme: Scheme, look: string) => {
@@ -197,7 +205,7 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
   const H = rows * 2
   const GROUND = H - 1
   const big = size === 'big'
-  const COLOR = SCENE_COLORS[scheme]
+  const COLOR = (ZONE_COLORS[zoneOf(view.kills)] ?? ZONE_COLORS[0])![scheme]
   const PAL = palOf(scheme, view.look ?? 'intern')
   const looks = big ? BIG_LOOKS : LOOKS
   const art = looks[view.look ?? 'intern'] ?? looks.intern
@@ -386,6 +394,12 @@ const expBar = (x: Save) => {
   const full = Math.min(BAR, Math.floor((into / need) * BAR))
   return '█'.repeat(full) + '░'.repeat(BAR - full)
 }
+const zoneName = (x: Save) => ZONES[zoneOf(x.kills)]?.name ?? ''
+/** The stages of the zone the hero is in. */
+const zoneStages = (x: Save) => {
+  const first = Math.floor((stageOf(x.kills) - 1) / ZONE_STAGES) * ZONE_STAGES + 1
+  return `스테이지 ${first}~${first + ZONE_STAGES - 1}`
+}
 const stageLabel = (x: Save) => `${stageOf(x.kills)}-${(x.kills % KILLS_PER_STAGE) + 1}`
 const foe = (x: Save) => {
   const { name, hp } = foeOf(x)
@@ -452,7 +466,7 @@ export const report = (x: Save) => {
   return [
     `${jobName(jobOf(x))} Lv.${level} · 다음 레벨까지 경험치 ${amount(Math.ceil(need - into))}`,
     `직업: ${jobText(x)}`,
-    `스테이지 ${stageLabel(x)} · 상대: ${foe(x)}${bossWait(x) && ` · ${bossWait(x)}`}`,
+    `스테이지 ${stageLabel(x)} (${zoneName(x)}) · 상대: ${foe(x)}${bossWait(x) && ` · ${bossWait(x)}`}`,
     `골드 ${amount(x.gold)} · 공격력 ${amount(attack(x))} · 강화 +${x.enhance}`,
     `장비: ${gear.join(' · ')}`,
     `스킬 (남은 포인트 ${skillPoints(x)}): ${SKILLS.map(id => `${SKILL_NAMES[id]} ${x.skills[id]}/${MAX_SKILL}`).join(' · ')}`,
@@ -553,6 +567,7 @@ export const news = (before: Save, after: Save, hits: readonly Hit[]) => {
   const [from, to] = [levelOf(before.exp), levelOf(after.exp)]
   if (to > from) said.push(`레벨 업! Lv.${to} · 스킬 포인트 +${to - from}`)
   if (hits.some(h => h.killed && h.boss)) said.push(`보스 ${BOSS_NAME} 처치! 스테이지 ${stageLabel(after)}`)
+  if (zoneOf(after.kills) !== zoneOf(before.kills)) said.push(`새 지역: ${zoneName(after)}! ${zoneStages(after)}`)
   const opens = nextTierLevel(before)
   const applied = !jobOf(before).trial && jobOf(after).trial
   if (applied) said.push(`${jobOf(after).tier + 1}차 전직 시험 자동 신청! ${EXAM_NAME}은 공격력 ${amount(examNeed(after))}부터 나와요`)
@@ -1011,7 +1026,9 @@ export const register: Register = on => {
           <Text bold color={SCENE.crit}>
             ⚔ {jobName(job)} Lv.{levelOf(x.exp)}
           </Text>
-          <Text>스테이지 {stageLabel(x)}</Text>
+          <Text>
+            스테이지 {stageLabel(x)} · {zoneName(x)}
+          </Text>
         </Box>
         <Text>
           골드 {amount(x.gold)} · 공격력 {amount(attack(x))} · 강화 +{x.enhance}
