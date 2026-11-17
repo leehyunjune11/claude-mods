@@ -937,3 +937,35 @@ test('a long tick with 자동 climbs as it goes, past where one 강화 at the en
   const stuck = autoAttack(fresh(), 4 * 3_600_000, () => 0.99).save
   expect(stageOf(saved(world).kills)).toBeGreaterThan(stageOf(stuck.kills) + 5)
 })
+
+test('a session starting after every session was closed pays the gap at half, once, and says so', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on, { seen: NOON - 5 * 3_600_000 })
+  await start($)
+  const note = world.toasts.find(t => t.startsWith('세션을 닫아 둔'))
+  expect(note).toMatch(/^세션을 닫아 둔 5시간 동안: 몬스터 [\d.K]+마리 처치 · .* \(절반 효율\)$/)
+  expect(saved(world).kills).toBeGreaterThan(0)
+  expect(world.store.seen).toBe(NOON)
+  // Open, it keeps saying it is here; a reload or a second session then pays nothing.
+  await clock.advance(60_000)
+  expect(world.store.seen).toBe(NOON + 60_000)
+  world.toasts = []
+  await start($)
+  expect(world.toasts.filter(t => t.startsWith('세션을 닫아 둔'))).toEqual([])
+})
+
+test('no seen yet, or one a few minutes old, pays nothing', async ($, on) => {
+  mock.clock(on, { now: NOON })
+  const world = engine(on)
+  await start($)
+  expect(world.store.seen).toBe(NOON)
+  expect(saved(world).kills).toBe(0)
+})
+
+test('a seen a few minutes old pays nothing', async ($, on) => {
+  mock.clock(on, { now: NOON })
+  const world = engine(on, { seen: NOON - 5 * 60_000 })
+  await start($)
+  expect(world.toasts.filter(t => t.startsWith('세션을 닫아 둔'))).toEqual([])
+  expect(saved(world).kills).toBe(0)
+})

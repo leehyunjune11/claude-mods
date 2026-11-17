@@ -607,6 +607,27 @@ export const awayNote = (ms: number, hits: readonly Hit[], gold: number, exp: nu
   return `${label} ${away} 동안: ${parts.join(' · ')}`
 }
 
+// --- 오프라인 보상: time with no session open counts at half, up to CATCH_UP_MS of it. Every open
+// session says it is here (`seen`) on its 30-second timer; a session that starts and finds that
+// older than AWAY_MS pays the gap, having moved `seen` on first so the next one starting does not.
+// ponytail: two sessions starting in the same instant both pay, as quest rewards can; and a laptop
+// that wakes into a new session before the old one's timer fires pays time the old one also counts.
+
+const SEEN = 'seen'
+const OFFLINE_RATE = 0.5
+
+const beat = async ($: EngineInterface) => $.store.set(SEEN, await $.clock.now())
+
+const offline = async ($: EngineInterface) => {
+  const now = await $.clock.now()
+  const seen = await $.store.get(SEEN)
+  await beat($)
+  if (typeof seen !== 'number' || now - seen < AWAY_MS) return
+  const ms = Math.min(now - seen, CATCH_UP_MS)
+  await play($, { type: 'tick', ms: ms * OFFLINE_RATE }, { ms, label: '세션을 닫아 둔', tail: ' (절반 효율)' })
+  await sync($, false)
+}
+
 /** A long tick is played in pieces this long, 자동 강화 buying between: it climbs as it goes. */
 const GROW_MS = 10 * 60_000
 
@@ -614,7 +635,7 @@ const GROW_MS = 10 * 60_000
  * Moves the save by `event`; a tick hands back the time short of its next attack. A tick that long
  * or longer says what it brought: as time away, or as `away` says (the closed time it stood for).
  */
-const play = async ($: EngineInterface, event: GameEvent, away?: { ms: number; label: string }) => {
+const play = async ($: EngineInterface, event: GameEvent, away?: { ms: number; label: string; tail?: string }) => {
   const now = await $.clock.now()
   let hits: Hit[] = []
   let left = 0
@@ -648,7 +669,7 @@ const play = async ($: EngineInterface, event: GameEvent, away?: { ms: number; l
   scene.queue = [...scene.queue, ...hits].slice(-QUEUE)
   if (event.type === 'tick' && (away || event.ms >= AWAY_MS)) {
     const { ms, label } = away ?? { ms: event.ms, label: '자리 비운' }
-    const note = awayNote(ms, hits, earned, after.exp - before.exp, after.enhance - before.enhance, label)
+    const note = awayNote(ms, hits, earned, after.exp - before.exp, after.enhance - before.enhance, label) + (away?.tail ?? '')
     $.ui.toast(note)
     await update($, pane, p => ({ ...p, note }))
   }
@@ -933,6 +954,7 @@ export const register: Register = on => {
     await advance($)
     // After a reload this runs again over progress not yet saved: the row keeps it.
     await sync($)
+    await offline($)
     // A band that stayed up through a reload needs drawing to start its timer again.
     $.ui.invalidate('ui.render')
     await readQuests($)
@@ -940,6 +962,7 @@ export const register: Register = on => {
     questTimer?.cancel()
     questTimer = $.clock.every(QUEST_MS, () => {
       void readQuests($)
+      void beat($)
     })
     return next(e)
   })
@@ -1053,6 +1076,7 @@ export const register: Register = on => {
 
   on('session.end', async ($, e, next) => {
     await sync($, false).catch(() => {})
+    await beat($).catch(() => {})
     return next(e)
   })
 
