@@ -667,8 +667,10 @@ test('/rpg 테마 picks the scheme, the store keeps it, and 시스템 follows ma
   expect(await field()).toBe(hexOf(DAY_SCENE.sky))
   await rpg($, '테마 시스템')
   expect(await field()).toBe(hexOf(SCENE.sky))
+  world.appearance = ''
+  await rpg($, '테마 시스템')
+  expect(await field()).toBe(hexOf(DAY_SCENE.sky))
   world.appearance = undefined
-  await rpg($, '테마 라이트')
   await rpg($, '테마 시스템')
   expect(await field()).toBe(hexOf(SCENE.sky))
 })

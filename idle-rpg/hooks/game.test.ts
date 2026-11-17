@@ -414,16 +414,16 @@ test('a hero who idles and spends all gold on 강화 passes each 전직 within 3
   }
 
   const lv10 = idleUntil(fresh(), x => levelOf(x.exp) >= 10).x
-  const first = pass(lv10, '원거리')
-  expect(first.hours).toBeLessThan(3) // measured: 0.07h (4 minutes), from stage 22
-  // The live hero: stage 22, Lv.26, never a 강화, no gold to start with.
-  const live = pass(having({ exp: 202825, kills: 219 }), '근접')
-  expect(live.hours).toBeLessThan(3) // measured: 0.18h
-  const second = pass(idleUntil(first.x, x => levelOf(x.exp) >= 30).x, '')
-  expect(second.hours).toBeLessThan(3) // measured: 0.37h
-  const third = pass(idleUntil(second.x, x => levelOf(x.exp) >= 60).x, '')
-  expect(third.hours).toBeLessThan(3) // measured: 1.38h
-  expect(jobOf(third.x)).toMatchObject({ line: 'ranged', tier: 3 })
+  // The live hero: stage 22, Lv.26, never a 강화, no gold to start with. Measured: 0.18h.
+  expect(pass(having({ exp: 202825, kills: 219 }), '근접').hours).toBeLessThan(3)
+  // Measured, 1차 / 2차 / 3차 in hours: 근접 0.07 / 0.37 / 1.38, 마법 0.07 / 0.28 / 1.20,
+  // 원거리 0.07 / 0.30 / 0.97, 암살 0.07 / 0.28 / 0.98 (a fresh Lv.10 stands at stage 22).
+  for (const line of ['근접', '마법', '원거리', '암살']) {
+    const first = pass(lv10, line)
+    const second = pass(idleUntil(first.x, x => levelOf(x.exp) >= 30).x, '')
+    const third = pass(idleUntil(second.x, x => levelOf(x.exp) >= 60).x, '')
+    expect([line, first.hours < 3, second.hours < 3, third.hours < 3, jobOf(third.x).tier]).toEqual([line, true, true, true, 3])
+  }
 })
 
 test('13 looks: the 인턴 and each line at 1차 to 3차, two standing frames and two of an attack, each its own', () => {
