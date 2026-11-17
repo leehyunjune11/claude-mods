@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 
 import type { IdleRpgSave as Save } from '../types'
 import { apply, fresh, join, levelOf, parseSave, questReward, stageOf } from './game'
-import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene, trialTag } from './register'
+import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene, trialTag, awayNote } from './register'
 import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, PALETTE, SCENE } from './sprites'
 
 const BAND = {
@@ -483,9 +483,9 @@ test('a long catch-up toasts each kind of news once, and a rescan that raises th
   await endTurn($)
   const caught = apply(fresh(), { type: 'tick', ms: 8 * 3_600_000 }, () => 0.99)
   expect(caught.hits.filter(h => h.boss && h.killed).length).toBeGreaterThan(5)
-  const kinds = world.toasts.map(text => text.split('!')[0])
-  expect(kinds).toEqual(['레벨 업', '보스 레거시 골렘 처치', '전직 가능'])
-  expect(world.toasts[0]).toContain(`스킬 포인트 +${levelOf(caught.save.exp) - 1}`)
+  const kinds = world.toasts.map(text => text.split(/[!:]/)[0])
+  expect(kinds).toEqual(['자리 비운 8시간 동안', '레벨 업', '보스 레거시 골렘 처치', '전직 가능'])
+  expect(world.toasts[1]).toContain(`스킬 포인트 +${levelOf(caught.save.exp) - 1}`)
 
   // Another session's progress, read in, toasts nothing here.
   world.toasts = []
@@ -869,4 +869,26 @@ test('/rpg 자동 spends the gold on 강화 as it comes, but for one 뽑기, and
   await endTurn($)
   expect(saved(world).enhance).toBe(held)
   expect(await rpg($, '자동 반만')).toContain('켜기, 끄기')
+})
+
+test('coming back after time away toasts what it brought, once, and a short gap says nothing', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on)
+  await start($)
+  await clock.advance(5 * 60_000)
+  await endTurn($)
+  expect(world.toasts.filter(t => t.startsWith('자리 비운'))).toEqual([])
+
+  await clock.advance(2 * 3_600_000 + 13 * 60_000)
+  await endTurn($)
+  const away = world.toasts.filter(t => t.startsWith('자리 비운'))
+  expect(away).toHaveLength(1)
+  expect(away[0]).toMatch(/^자리 비운 2시간 13분 동안: 몬스터 [\d.,K]+마리 처치 · 골드 \+[\d.K]+ · 경험치 \+[\d.K]+$/)
+})
+
+test('the away note counts kills, gold, exp, and 자동 강화 when it bought any', () => {
+  const kill = { dmg: 1, crit: false, killed: true, boss: false, advanced: true }
+  const miss = { ...kill, killed: false }
+  expect(awayNote(45 * 60_000, [kill, miss, kill], 1234, 56, 0)).toBe('자리 비운 45분 동안: 몬스터 2마리 처치 · 골드 +1234 · 경험치 +56')
+  expect(awayNote(3 * 3_600_000, [kill], 12_000, 7, 4)).toBe('자리 비운 3시간 동안: 몬스터 1마리 처치 · 골드 +12.0K · 경험치 +7 · 자동 강화 +4')
 })

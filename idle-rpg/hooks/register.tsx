@@ -539,10 +539,25 @@ const setAuto = async ($: EngineInterface, name: string) => {
   return next ? `자동 강화: 켜짐 (골드가 쌓이는 대로 강화하고 뽑기 ${GACHA_COST}골드는 남겨요)` : '자동 강화: 꺼짐'
 }
 
+/** A catch-up this long or longer is time away: it says what came of it. */
+const AWAY_MS = 10 * 60_000
+
+/** What time away brought: the kills, the gold and exp they paid, and what 자동 강화 bought. */
+export const awayNote = (ms: number, hits: readonly Hit[], gold: number, exp: number, enhanced: number) => {
+  const minutes = Math.floor(ms / 60_000)
+  const hours = Math.floor(minutes / 60)
+  const away = [hours > 0 && `${hours}시간`, minutes % 60 > 0 && `${minutes % 60}분`].filter(Boolean).join(' ')
+  const kills = hits.filter(hit => hit.killed).length
+  const parts = [`몬스터 ${amount(kills)}마리 처치`, `골드 +${amount(gold)}`, `경험치 +${amount(exp)}`]
+  if (enhanced > 0) parts.push(`자동 강화 +${enhanced}`)
+  return `자리 비운 ${away} 동안: ${parts.join(' · ')}`
+}
+
 const play = async ($: EngineInterface, event: GameEvent) => {
   const now = await $.clock.now()
   let hits: Hit[] = []
   let left = 0
+  let earned = 0 // gold the hits paid, before 자동 강화 spends it
   let before = fresh()
   const after = await update($, save, x => {
     before = x
@@ -554,11 +569,17 @@ const play = async ($: EngineInterface, event: GameEvent) => {
     const next = autoAttack(x, event.ms, Math.random, now)
     hits = next.hits
     left = next.left
+    earned = next.save.gold - x.gold
     return grow(next.save)
   })
   pace = autoMs(after)
   // A long catch-up is hundreds of hits: the scene plays the last few.
   scene.queue = [...scene.queue, ...hits].slice(-QUEUE)
+  if (event.type === 'tick' && event.ms >= AWAY_MS) {
+    const note = awayNote(event.ms, hits, earned, after.exp - before.exp, after.enhance - before.enhance)
+    $.ui.toast(note)
+    await update($, pane, p => ({ ...p, note }))
+  }
   for (const text of news(before, after, hits)) $.ui.toast(text)
   return left
 }
