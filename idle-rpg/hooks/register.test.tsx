@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import type { IdleRpgSave as Save } from '../types'
-import { apply, fresh, join, levelOf, parseSave, questReward, stageOf } from './game'
+import { apply, autoAttack, fresh, join, levelOf, parseSave, questReward, stageOf } from './game'
 import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene, trialTag, awayNote } from './register'
 import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, PALETTE, SCENE } from './sprites'
 
@@ -911,3 +911,29 @@ test("a skill hit plays its line's effect over the monster in the crit color, an
   }
 })
 
+
+test('자동 applies for the next 전직 once the level allows, in the line it has, and says so', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  let exp = 0
+  while (levelOf(exp) < 30) exp += 1000
+  // Stage 30: the examiner is far past what the gold can buy, so the trial stays pending.
+  const world = engine(on, { auto: true, save: { ...stored({ exp, gold: 5000, kills: 290 }), job: { line: 'magic', tier: 1, at: 1 } } })
+  await start($)
+  await clock.advance(3000)
+  await endTurn($)
+  expect(saved(world).job).toMatchObject({ line: 'magic', tier: 1, trial: { line: 'magic' } })
+  expect(world.toasts.some(t => t.startsWith('2차 전직 시험 자동 신청!'))).toBe(true)
+  expect(world.toasts.some(t => t.startsWith('전직 가능'))).toBe(false)
+})
+
+test('a long tick with 자동 climbs as it goes, past where one 강화 at the end would leave it', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on)
+  await start($)
+  await rpg($, '자동 켜기')
+  await clock.advance(4 * 3_600_000)
+  await endTurn($)
+  // Without 강화 along the way the same four hours stop at a boss.
+  const stuck = autoAttack(fresh(), 4 * 3_600_000, () => 0.99).save
+  expect(stageOf(saved(world).kills)).toBeGreaterThan(stageOf(stuck.kills) + 5)
+})
