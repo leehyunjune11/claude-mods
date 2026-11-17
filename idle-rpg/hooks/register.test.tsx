@@ -21,6 +21,7 @@ const engine = (on: On, store: Record<string, unknown> = {}) => {
     usd: undefined as number | undefined,
     store: { ...store } as Record<string, any>,
     blits: 0,
+    blitCells: '',
     deny: undefined as string | undefined,
     failSets: 0,
     onSet: undefined as ((key: string) => void) | undefined,
@@ -68,8 +69,9 @@ const engine = (on: On, store: Record<string, unknown> = {}) => {
   }))
   on('command.register', (_, e) => ({ value: { command: e.name } }))
   on('ui.invalidate', () => ({ value: undefined }))
-  on('ui.blit', () => {
+  on('ui.blit', (_, e) => {
     world.blits++
+    world.blitCells = 'cells' in e ? String(e.cells) : ''
     return { value: world.deny ? { deny: world.deny } : {} }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -808,4 +810,18 @@ test('every big look and the examiner, mid-attack on a day sky, draw nothing nea
       expect([look, [...new Set(day)].filter(c => c !== cloud && luminance(c) > 0.75)]).toEqual([look, []])
     }
   }
+})
+
+test('with 크게 the frames between drawings are painted 크게 too', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on)
+  await start($)
+  await rpg($, '크기 크게')
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const blits = world.blits
+  await clock.advance(5000)
+  expect(world.blits).toBeGreaterThan(blits)
+  // Three 32-bit words a cell: the glyph and its two colors.
+  expect(atob(world.blitCells).length).toBe(72 * 9 * 3 * 4)
+  await ui.unmount()
 })

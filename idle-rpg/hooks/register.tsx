@@ -422,6 +422,7 @@ export const report = (x: Save) => {
 // Module variables: a reload starts them over, and the render hook starts the timer again.
 let scene = newScene()
 let cols = MAX_COLS
+let drawn: Size = 'small' // the size the band last laid out: the frames between draw at it
 let band = ''
 let anim: Timer | undefined
 let animFast = false
@@ -600,7 +601,7 @@ const frame = async ($: EngineInterface) => {
   const x = await read($, save)
   // A slow tick plays a few frames at once: the swing, the flash and the number still read.
   for (let i = animFast ? 1 : IDLE_STEPS; i > 0; i--) stepScene(scene, animFast ? 1 : 2)
-  const shown = await $.ui.blit({ requestId: band, key: RASTER, cells: sceneCells(scene, viewOf(scene, x), cols, scheme()) })
+  const shown = await $.ui.blit({ requestId: band, key: RASTER, cells: sceneCells(scene, viewOf(scene, x), cols, scheme(), drawn) })
   // An old frame still in flight has no say over the timer that replaced it.
   if (anim !== mine) return
   if (!shown.deny) {
@@ -984,7 +985,7 @@ export const register: Register = on => {
     band = e.requestId
     startAnim($, working && isMoving(scene))
     const { Raster } = $.ui.resolve(e)
-    const drawn: Size = layout === 'big' ? 'big' : 'small'
+    drawn = layout === 'big' ? 'big' : 'small'
     return (
       <Box flexDirection="column">
         <Raster
