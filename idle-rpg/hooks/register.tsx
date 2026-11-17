@@ -420,6 +420,7 @@ export const report = (x: Save) => {
     `  /rpg 계열 <이름>: 같은 차수에서 계열 바꾸기 (다음 강화 20번 값, 지금 ${amount(lineChangeCost(x))}골드)`,
     `  /rpg 테마 [시스템|다크|라이트]: 사냥터 색 (지금 ${THEME_NAMES[theme]})`,
     `  /rpg 크기 [작게|크게]: 사냥터 크기 (지금 ${SIZE_NAMES[size]})`,
+    `  /rpg 자동 [켜기|끄기]: 골드가 쌓이는 대로 강화 (지금 ${auto ? '켜짐' : '꺼짐'})`,
     '  /rpg 끄기 · /rpg 켜기: 띠 숨기기 · 다시 보이기 (꺼도 사냥은 계속돼요)',
   ].join('\n')
 }
@@ -513,6 +514,31 @@ export const news = (before: Save, after: Save, hits: readonly Hit[]) => {
 }
 
 /** Moves the save by `event`; a tick hands back the time short of its next attack. */
+// --- 자동 강화: the person's setting, kept in the store; off unless asked. On, the gold goes to 강화
+// as it comes, but for one 뽑기's worth.
+// ponytail: two sessions spend the same gold until a rescan shows each the other's spending; the
+// rows then owe it, and the gold reads 0 until earnings pay it off. A per-store lock fixes it.
+
+let auto = false
+
+/** The save with what 자동 강화 buys out of its gold. */
+const grow = (x: Save) => {
+  if (!auto) return x
+  const bought = enhance(x, true, GACHA_COST)
+  return 'refused' in bought ? x : bought.save
+}
+
+const setAuto = async ($: EngineInterface, name: string) => {
+  const next = name === '켜기' ? true : name === '끄기' ? false : name ? undefined : !auto
+  if (next === undefined) return '자동 강화는 켜기, 끄기 중에서 골라 주세요.'
+  auto = next
+  await $.store.set('auto', next)
+  if (next) await buy($, x => ({ save: grow(x), note: '' }))
+  await sync($, false)
+  $.ui.invalidate('ui.render')
+  return next ? `자동 강화: 켜짐 (골드가 쌓이는 대로 강화하고 뽑기 ${GACHA_COST}골드는 남겨요)` : '자동 강화: 꺼짐'
+}
+
 const play = async ($: EngineInterface, event: GameEvent) => {
   const now = await $.clock.now()
   let hits: Hit[] = []
@@ -523,12 +549,12 @@ const play = async ($: EngineInterface, event: GameEvent) => {
     if (event.type !== 'tick') {
       const next = apply(x, event, Math.random, now)
       hits = next.hits
-      return next.save
+      return grow(next.save)
     }
     const next = autoAttack(x, event.ms, Math.random, now)
     hits = next.hits
     left = next.left
-    return next.save
+    return grow(next.save)
   })
   pace = autoMs(after)
   // A long catch-up is hundreds of hits: the scene plays the last few.
@@ -676,6 +702,7 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
   if (verb === '끄기' || verb === '켜기') return setOn($, verb === '켜기')
   if (verb === '테마') return setTheme($, arg)
   if (verb === '크기') return setSize($, arg)
+  if (verb === '자동') return setAuto($, arg)
   if (verb === '강화') {
     const before = (await read($, save)).enhance
     return settle(await buy($, x => enhance(x, arg === '최대')), x => {
@@ -791,12 +818,13 @@ export const register: Register = on => {
     await $.command.register({
       name: 'rpg',
       description: '방치형 RPG: 상태·메뉴 보기, 강화, 뽑기, 스킬, 전직',
-      argumentHint: '[강화 [최대] | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 끄기 | 켜기]',
+      argumentHint: '[강화 [최대] | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
     })
     const kept = await $.store.get('theme')
     theme = THEMES.find(t => t === kept) ?? 'system'
     const keptSize = await $.store.get('size')
     size = keptSize === 'big' ? 'big' : 'small'
+    auto = (await $.store.get('auto')) === true
     systemAt = -Infinity
     checkSystem($, await $.clock.now())
     const stored = await $.store.get('on')
@@ -872,6 +900,7 @@ export const register: Register = on => {
         <Box columnGap={2} flexWrap="wrap">
           {key('e', `강화 (${amount(enhanceCost(x))}골드)`, '강화')}
           {key('m', '강화 최대', '강화 최대')}
+          {key('u', `자동 강화: ${auto ? '켜짐' : '꺼짐'}`, '자동')}
           {key('g', `뽑기 (${GACHA_COST})`, '뽑기')}
         </Box>
         <Box columnGap={2} flexWrap="wrap">

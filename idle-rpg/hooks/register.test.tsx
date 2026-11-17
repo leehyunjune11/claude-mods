@@ -839,3 +839,34 @@ test('a pending trial says on the band how near the attack is, then that the exa
   expect((await ui.find({ type: 'Text', text: /Lv\./ }))?.text).toContain('[시험 공격력 28/485]')
   await ui.unmount()
 })
+
+test('/rpg 자동 spends the gold on 강화 as it comes, but for one 뽑기, and only while on', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on, { save: stored({ gold: 100_000 }) })
+  await start($)
+  await clock.advance(3000)
+  expect(saved(world).enhance).toBe(0) // off unless asked
+
+  expect(await rpg($, '자동 켜기')).toContain('자동 강화: 켜짐')
+  expect(world.store.auto).toBe(true)
+  const spent = saved(world)
+  expect(spent.enhance).toBeGreaterThan(30)
+  expect(spent.gold).toBeGreaterThanOrEqual(300)
+  expect(spent.gold - 300).toBeLessThan(50 * 1.1 ** spent.enhance) // short of the next 강화
+
+  // Gold that comes in later goes the same way: here another session's, read in by /rpg.
+  world.store['s:sess-b'] = { ...stored({ gold: 1_000_000 }), kills: 0 }
+  await rpg($)
+  await clock.advance(3000)
+  await endTurn($)
+  expect(saved(world).enhance).toBeGreaterThan(spent.enhance)
+
+  expect(await rpg($, '자동')).toContain('자동 강화: 꺼짐') // no word: the other one
+  const held = saved(world).enhance
+  world.store['s:sess-c'] = { ...stored({ gold: 1_000_000 }), kills: 0 }
+  await rpg($)
+  await clock.advance(3000)
+  await endTurn($)
+  expect(saved(world).enhance).toBe(held)
+  expect(await rpg($, '자동 반만')).toContain('켜기, 끄기')
+})

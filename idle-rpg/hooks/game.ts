@@ -255,10 +255,10 @@ export const costExp = (lastUsd: number | undefined, usd: number, rate: number) 
   return { exp, lastUsd: exp === 0 ? lastUsd : Math.min(usd, lastUsd + exp / rate) }
 }
 
-/** One 강화, or with `max` as many as the gold buys. */
-export const enhance = (save: Save, max = false): Purchase => {
+/** One 강화, or with `max` as many as the gold buys, `keep` gold left over. */
+export const enhance = (save: Save, max = false, keep = 0): Purchase => {
   let s = save
-  while (s.gold >= enhanceCost(s) && (max || s === save)) s = { ...s, gold: s.gold - enhanceCost(s), enhance: s.enhance + 1 }
+  while (s.gold - enhanceCost(s) >= keep && (max || s === save)) s = { ...s, gold: s.gold - enhanceCost(s), enhance: s.enhance + 1 }
   if (s === save) {
     return { refused: `골드가 부족해요. 강화에는 ${enhanceCost(save)}골드가 필요해요 (보유 ${Math.floor(save.gold)}).` }
   }
