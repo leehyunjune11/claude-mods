@@ -892,3 +892,22 @@ test('the away note counts kills, gold, exp, and 자동 강화 when it bought an
   expect(awayNote(45 * 60_000, [kill, miss, kill], 1234, 56, 0)).toBe('자리 비운 45분 동안: 몬스터 2마리 처치 · 골드 +1234 · 경험치 +56')
   expect(awayNote(3 * 3_600_000, [kill], 12_000, 7, 4)).toBe('자리 비운 3시간 동안: 몬스터 1마리 처치 · 골드 +12.0K · 경험치 +7 · 자동 강화 +4')
 })
+
+test("a skill hit plays its line's effect over the monster in the crit color, and holds the hit till done", () => {
+  const crit = hexOf(SCENE.crit)
+  const view = { kills: 3, boss: false, left: 1 }
+  const count = (scene: ReturnType<typeof newScene>) => paintScene(scene, view, 72).filter(c => c === crit).length
+  const plain = newScene()
+  plain.queue.push({ dmg: 1, crit: false, killed: false, boss: false, advanced: false })
+  for (let i = 0; i < 6; i++) stepScene(plain)
+  for (const line of ['melee', 'magic', 'ranged', 'rogue'] as const) {
+    const scene = newScene()
+    scene.queue.push({ dmg: 1, crit: false, killed: false, boss: false, advanced: false, skill: line })
+    for (let i = 0; i < 6; i++) stepScene(scene)
+    expect([line, count(scene) > count(plain) + 4]).toEqual([line, true])
+    expect(scene.cur?.skill).toBe(line) // past where a plain hit is done
+    for (let i = 0; i < 10; i++) stepScene(scene)
+    expect(scene.cur).toBeUndefined()
+  }
+})
+

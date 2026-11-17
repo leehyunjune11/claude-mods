@@ -2,6 +2,8 @@ import { expect, test } from 'claude-code/testing'
 
 import type { IdleRpgSave as Save } from '../types'
 import {
+  ACTIVE_NAMES,
+  ACTIVE_POWER,
   MOB_NAMES,
   apply,
   applyJob,
@@ -463,4 +465,15 @@ test('a quest pays by its xp, the level and the stage, the magic line more exp a
   expect(questReward(as('magic', 3), 10)).toEqual({ exp: 26, gold: 25 }) // 15 x 1.7
   expect(questReward(as('rogue', 3, { gear: { weapon: 0, armor: 4, ring: 0 } }), 10)).toEqual({ exp: 15, gold: 94 }) // 25 x 1.5 x 2.5
   expect(apply(fresh(), { type: 'reward', exp: 15, gold: 25 }, never).save).toMatchObject({ exp: 15, gold: 25 })
+})
+
+test("an auto attack is now and then the line's skill, from 1차 on, striking for its tier's power", () => {
+  const save = as('rogue', 2, { exp: 6802 })
+  // The skill's roll, then the crit's: a skill that does not crit.
+  const { hits } = autoAttack(save, 1500, rolls(0.01, 0.99))
+  expect(hits).toEqual([{ dmg: attack(save) * ACTIVE_POWER[2], crit: false, killed: true, boss: false, advanced: true, skill: 'rogue' }])
+  expect(autoAttack(save, 1500, rolls(0.5, 0.99)).hits[0]?.skill).toBeUndefined()
+  // The 인턴 has none, however the dice fall.
+  expect(autoAttack(fresh(), 1500, () => 0).hits[0]?.skill).toBeUndefined()
+  expect(Object.keys(ACTIVE_NAMES).sort()).toEqual(['magic', 'melee', 'ranged', 'rogue'])
 })

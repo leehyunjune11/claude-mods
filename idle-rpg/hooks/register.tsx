@@ -3,6 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { IdleRpgJobLine as JobLine, IdleRpgMeta as Meta, IdleRpgSave as Save, IdleRpgSkillId as SkillId } from '../types'
 import {
+  ACTIVE_NAMES,
   BOSS_NAME,
   EXAM_NAME,
   EXP_PER_USD,
@@ -97,6 +98,7 @@ const IMPACT = 2 // the frame of it that lands
 const FLASH = 3
 const ENTER = 8 // frames a monster takes to walk in
 const FLOAT = 10
+const FX = 8 // frames a skill's effect plays, from the hit landing
 const QUEUE = 4
 
 const rgb = (hex: string) => Number.parseInt(hex.slice(1), 16)
@@ -126,12 +128,14 @@ export type Scene = {
   swing: number
   flash: number
   enter: number
+  /** Frames left of the skill effect over the monster; the hit stays the current one till then. */
+  fx: number
   /** Frames walked so far, each monster's walk-in being ENTER of them: it slides the hills. */
   walked: number
   floats: { text: string; crit: boolean; y: number; life: number }[]
 }
 
-export const newScene = (): Scene => ({ t: 0, queue: [], swing: 0, flash: 0, enter: 0, walked: 0, floats: [] })
+export const newScene = (): Scene => ({ t: 0, queue: [], swing: 0, flash: 0, enter: 0, fx: 0, walked: 0, floats: [] })
 
 const damageText = (dmg: number) =>
   dmg < 10_000 ? String(dmg) : dmg < 1e7 ? `${Math.floor(dmg / 1000)}K` : dmg.toExponential(0).replace('e+', 'E')
@@ -144,14 +148,16 @@ export const stepScene = (s: Scene, dt = 1) => {
     s.walked++
   }
   if (s.flash > 0) s.flash--
+  if (s.fx > 0) s.fx--
   if (s.swing > 0) {
     s.swing--
     if (s.swing === IMPACT && s.cur) {
       s.flash = FLASH
-      s.floats.push({ text: damageText(s.cur.dmg), crit: s.cur.crit, y: 4, life: FLOAT })
+      if (s.cur.skill) s.fx = FX
+      s.floats.push({ text: damageText(s.cur.dmg), crit: s.cur.crit || s.cur.skill !== undefined, y: 4, life: FLOAT })
     }
   }
-  if (s.cur && s.swing === 0 && s.flash === 0) {
+  if (s.cur && s.swing === 0 && s.flash === 0 && s.fx === 0) {
     if (s.cur.killed) s.enter = ENTER
     s.cur = undefined
   }
@@ -270,6 +276,47 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
   if (s.enter === 0) {
     const full = Math.round(wide * view.left)
     for (let i = 0; i < wide; i++) px(mobX + i, GROUND, i < full ? COLOR.hp : COLOR.hpLost)
+  }
+
+  // A skill's effect over the monster, in the crit color: each line its own.
+  const skill = s.cur?.skill
+  if (skill && s.fx > 0) {
+    const p = FX - s.fx // 0 as it lands
+    const top = GROUND - mob.length
+    const cx = mobX + Math.floor(wide / 2)
+    const cy = Math.floor((top + GROUND) / 2)
+    const fx = (x: number, y: number) => {
+      if (y < GROUND) px(x, y, COLOR.crit)
+    }
+    if (skill === 'melee') {
+      // A cut down through it, then across.
+      for (let y = 0; y < Math.min(GROUND, ((p + 1) * GROUND) / 3); y++) fx(cx, y)
+      if (p >= 3) for (let x = mobX - 2; x < mobX + wide + 2; x++) fx(x, cy)
+    } else if (skill === 'magic') {
+      // A ring that spreads out from its middle.
+      const ring = 1 + Math.round((p * H) / 10)
+      for (let dx = -ring; dx <= ring; dx++) {
+        const dy = ring - Math.abs(dx)
+        fx(cx + dx, cy - dy)
+        fx(cx + dx, cy + dy)
+      }
+    } else if (skill === 'ranged') {
+      // A rain of arrows on it: shafts three pixels long, falling at staggered heights.
+      for (let i = 0; i < 7; i++) {
+        const x = mobX - 2 + Math.round(((wide + 3) * i) / 6)
+        const y = ((p * 3 + i * 5) % (GROUND + 3)) - 3
+        for (let j = 0; j < 3; j++) fx(x, y + j)
+      }
+    } else {
+      // Three slashes, crossing, one every other frame.
+      const tall = GROUND - top
+      for (let k = 0; k <= Math.min(2, p >> 1); k++) {
+        for (let j = 0; j < tall; j++) {
+          const x = mobX - 1 + k * 2 + Math.round((j * wide) / tall)
+          fx(k % 2 === 0 ? x : 2 * mobX + wide - x, top + j)
+        }
+      }
+    }
   }
 
   s.floats.forEach((f, n) => {
@@ -430,6 +477,7 @@ export const report = (x: Save) => {
 // Module variables: a reload starts them over, and the render hook starts the timer again.
 let scene = newScene()
 let cols = MAX_COLS
+let shownSkill: JobLine | undefined // the skill the band's line last named
 let drawn: Size = 'small' // the size the band last laid out: the frames between draw at it
 let band = ''
 let anim: Timer | undefined
@@ -655,6 +703,11 @@ const frame = async ($: EngineInterface) => {
   const x = await read($, save)
   // A slow tick plays a few frames at once: the swing, the flash and the number still read.
   for (let i = animFast ? 1 : IDLE_STEPS; i > 0; i--) stepScene(scene, animFast ? 1 : 2)
+  // The band's line names a skill while it plays: it is drawn anew as one starts and ends.
+  if (scene.cur?.skill !== shownSkill) {
+    shownSkill = scene.cur?.skill
+    $.ui.invalidate('ui.render')
+  }
   const shown = await $.ui.blit({ requestId: band, key: RASTER, cells: sceneCells(scene, viewOf(scene, x), cols, scheme(), drawn) })
   // An old frame still in flight has no say over the timer that replaced it.
   if (anim !== mine) return
@@ -1011,6 +1064,12 @@ export const register: Register = on => {
           <Text bold color={SCENE.crit}>
             {' '}
             [전직 가능]
+          </Text>
+        )}
+        {scene.cur?.skill && (
+          <Text bold color={SCENE.crit}>
+            {' '}
+            [{ACTIVE_NAMES[scene.cur.skill]}!]
           </Text>
         )}
         {trialTag(x) !== '' && (

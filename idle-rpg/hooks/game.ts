@@ -79,7 +79,7 @@ const RARITY_EDGES = [0.6, 0.88, 0.98]
 export type Rng = () => number
 /** `advanced`: the kill moved the hero on; one made while the boss waits does not. */
 /** `exam`: the hit fell on the 전직 시험관; present only then. */
-export type Hit = { dmg: number; crit: boolean; killed: boolean; boss: boolean; advanced: boolean; exam?: true }
+export type Hit = { dmg: number; crit: boolean; killed: boolean; boss: boolean; advanced: boolean; exam?: true; skill?: JobLine }
 export type GameEvent =
   | { type: 'tick'; ms: number }
   | { type: 'tool' }
@@ -207,6 +207,18 @@ const strike = (s: Save, times: number, rng: Rng, now: number): { save: Save; hi
   }
 }
 
+/** An auto attack is the line's own skill this often, from 1차 on. */
+export const ACTIVE_CHANCE = 0.05
+/** What the skill strikes for, in attacks, by tier. */
+export const ACTIVE_POWER = [0, 5, 8, 12] as const
+/** Each line's skill: the same strength, its own look and name. */
+export const ACTIVE_NAMES: Record<JobLine, string> = {
+  melee: '브레이크포인트 베기',
+  magic: '컴파일 폭발',
+  ranged: '병렬 화살비',
+  rogue: '핫픽스 난도질',
+}
+
 /**
  * Auto attacks over `ms`, one each `autoMs` of the save as it stands at that attack (a 전직 mid-way
  * changes the pace), and the time short of the next: the caller carries it.
@@ -217,9 +229,11 @@ export const autoAttack = (save: Save, ms: number, rng: Rng, now = 0) => {
   let left = ms
   for (let step = autoMs(s); left >= step; step = autoMs(s)) {
     left -= step
-    const struck = strike(s, 1, rng, now)
+    const { line, tier } = jobOf(s)
+    const skill = line !== null && rng() < ACTIVE_CHANCE ? line : undefined
+    const struck = strike(s, skill ? ACTIVE_POWER[tier] : 1, rng, now)
     s = struck.save
-    hits.push(struck.hit)
+    hits.push(skill ? { ...struck.hit, skill } : struck.hit)
   }
   return { save: s, hits, left }
 }
