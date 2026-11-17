@@ -50,7 +50,7 @@ import {
   trait,
 } from './game'
 import type { GameEvent, Hit, Purchase } from './game'
-import { BOSS, EXAMINER, FONT, LOOKS, MOBS, PALETTE, SCENE, SCHEMES } from './sprites'
+import { BOSS, BOSS_STEP, EXAMINER, FONT, LOOKS, MOB_STEPS, MOBS, PALETTE, SCENE, SCHEMES, TINTS } from './sprites'
 import type { Scheme } from './sprites'
 
 const RASTER = 'field'
@@ -175,10 +175,11 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
     if (a >= 0 && a < cols && b >= 0 && b < H) p[b * cols + a] = c
   }
   /**
-   * Draws a sprite, ringed in the outline color first unless `ring` is off. Letters in `bare` (an
-   * attack's slash) are drawn but not ringed, and the ring never covers the ground.
+   * Draws a sprite in `pal`, or all in `ink`, ringed in the outline color first unless `ring` is
+   * off. Letters in `bare` (an attack's slash) are drawn but not ringed; no ring covers the ground.
    */
-  const sprite = (rows: readonly string[], sx: number, sy: number, ink?: number, ring = true, bare = '') => {
+  type Draw = { ink?: number; ring?: boolean; bare?: string; pal?: Record<string, number> }
+  const sprite = (rows: readonly string[], sx: number, sy: number, { ink, ring = true, bare = '', pal = PAL }: Draw = {}) => {
     const solid = (i: number, j: number) => {
       const c = rows[j]?.[i]
       return c !== undefined && c !== '.' && !bare.includes(c)
@@ -192,7 +193,7 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
     }
     rows.forEach((row, j) => {
       ;[...row].forEach((c, i) => {
-        const color = c === '.' ? undefined : (ink ?? PAL[c])
+        const color = c === '.' ? undefined : (ink ?? pal[c])
         if (color !== undefined) px(sx + i, sy + j, color)
       })
     })
@@ -213,13 +214,19 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
 
   const beat = (s.t >> 3) & 1
   const hero = s.swing > IMPACT ? art?.swing[0] : s.cur ? art?.swing[1] : art?.idle[beat]
-  if (hero) sprite(hero, HERO_X, GROUND - hero.length, undefined, true, 'C')
+  if (hero) sprite(hero, HERO_X, GROUND - hero.length, { bare: 'C' })
 
-  const mob = view.exam ? EXAMINER : view.boss ? BOSS : (MOBS[mobIndex(view.kills)] ?? BOSS)
+  // A monster shifts to its second frame on the off beat while it waits, and hops as it walks in.
+  const kind = view.boss ? MOBS.length : mobIndex(view.kills)
+  const step = beat === 1 && s.enter === 0 && !s.cur
+  const mob = view.exam ? EXAMINER : ((step ? [...MOB_STEPS, BOSS_STEP] : [...MOBS, BOSS])[kind] ?? BOSS)
+  const tints = TINTS[kind] ?? []
+  const tint = view.exam ? {} : (tints[(stageOf(view.kills) - 1) % tints.length] ?? {})
   const wide = mob[0]?.length ?? 0
   const mobX = MOB_X + Math.round(((cols - MOB_X) * s.enter) / ENTER)
-  const hop = mob.length < GROUND && s.enter % 2 === 1 ? 1 : mob.length < GROUND && s.enter === 0 && !s.cur ? beat : 0
-  sprite(mob, mobX, GROUND - mob.length - hop, s.flash > 0 ? COLOR.flash : undefined)
+  const hop = mob.length < GROUND && s.enter % 2 === 1 ? 1 : 0
+  const ink = s.flash > 0 ? COLOR.flash : undefined
+  sprite(mob, mobX, GROUND - mob.length - hop, { ink, pal: { ...PAL, ...colors(tint) } })
   if (s.enter === 0) {
     const full = Math.round(wide * view.left)
     for (let i = 0; i < wide; i++) px(mobX + i, GROUND, i < full ? COLOR.hp : COLOR.hpLost)
@@ -227,7 +234,7 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
 
   s.floats.forEach((f, n) => {
     ;[...f.text].forEach((digit, i) => {
-      sprite(FONT[digit] ?? [], MOB_X + wide + 2 + i * 4 + n * 2, f.y, f.crit ? COLOR.crit : COLOR.damage, false)
+      sprite(FONT[digit] ?? [], MOB_X + wide + 2 + i * 4 + n * 2, f.y, { ink: f.crit ? COLOR.crit : COLOR.damage, ring: false })
     })
   })
   return p

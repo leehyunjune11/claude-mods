@@ -447,6 +447,74 @@ export const BOSS = [
   '..nnn...nnn..',
 ]
 
+/** Each monster's second frame, the one it shifts to on the off beat; MOBS's order and sizes. */
+export const MOB_STEPS = [
+  [
+    '.K......K.',
+    '..K....K..',
+    '..GGGGGG..',
+    '.GWKGGWKG.',
+    '.GGGGGGGG.',
+    '..gGGGGg..',
+    'g..gGGg..g',
+    '....gg....',
+  ],
+  [
+    '..PPPPPP..',
+    '.PPPPPPPP.',
+    '.PKKPPKKP.',
+    '.PKKPPKKP.',
+    '.PPPPPPPP.',
+    '.pPPPPPPp.',
+    '.pPPKKPPp.',
+    '..pp.pp.p.',
+  ],
+  [
+    '....OOOOOO..',
+    '...OO....OO.',
+    'OO.O..OO..O.',
+    'KOWO.O..O.O.',
+    '.O...O.oo.O.',
+    '.OO.OO..ooo.',
+    '..OOOooooo..',
+  ],
+  [
+    '..........',
+    '....C.....',
+    '..CCCCC...',
+    '.CCWCCCCC.',
+    '.CKCCKCCC.',
+    'CCCCCCCcc.',
+    '.cccccc...',
+    '..c...c..c',
+  ],
+]
+
+/** The golem's second frame: its fists up. */
+export const BOSS_STEP = [
+  'NN.........NN',
+  'NN.NNNNNNN.NN',
+  '.nNNNNNNNNNn.',
+  '..NRRNNNRRN..',
+  '..NNNNNNNNN..',
+  '...NNnnnNN...',
+  '...NNNNNNN...',
+  '...NNn.nNN...',
+  '..nnn...nnn..',
+]
+
+/**
+ * The colors a monster wears by stage, in MOBS's order then the golem's: a stage takes the next
+ * one round, the first being PALETTE's own. None is near white, which a day sky would swallow.
+ */
+export const TINTS: Record<string, string>[][] = [
+  [{}, { G: '#e0c040', g: '#9a7a1c' }, { G: '#e06a6a', g: '#9a2f3a' }, { G: '#5ab0e0', g: '#2f6a9a' }],
+  [{}, { P: '#5fc7a0', p: '#2f8a6a' }, { P: '#f09ac0', p: '#b04a7a' }, { P: '#9aa4b4', p: '#5a6274' }],
+  [{}, { O: '#6fd36a', o: '#2f8f4e' }, { O: '#c07ae0', o: '#7a3a9a' }, { O: '#e0c040', o: '#9a7a1c' }],
+  [{}, { C: '#ff9d3c', c: '#b85f1a' }, { C: '#ff7ae0', c: '#a03a8a' }, { C: '#7fd06a', c: '#3f8a3a' }],
+  [{}, { N: '#9a7650', n: '#5a4030' }, { N: '#6a86a6', n: '#3a4a60' }, { N: '#7f9060', n: '#4a5233' }],
+]
+
 /** Damage numbers: the digits, and K for thousands. */
 export const FONT: Record<string, string[]> = {
   '0': ['###', '#.#', '#.#', '#.#', '###'],

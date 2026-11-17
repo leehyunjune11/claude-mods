@@ -27,7 +27,7 @@ import {
   stageOf,
   total,
 } from './game'
-import { BOSS, DAY_PALETTE, EXAMINER, FONT, HERO_IDLE, HERO_SWING, LOOKS, MOBS, PALETTE } from './sprites'
+import { BOSS, BOSS_STEP, DAY_PALETTE, EXAMINER, FONT, HERO_IDLE, HERO_SWING, LOOKS, MOB_STEPS, MOBS, PALETTE, TINTS } from './sprites'
 
 const never = () => 0.99
 const rolls = (...values: number[]) => {
@@ -222,13 +222,19 @@ test('parseSave takes a stored save and nothing else', () => {
 })
 
 test('every sprite is a grid of palette colors that fits the scene', () => {
-  const sprites = [...HERO_IDLE, ...HERO_SWING, ...MOBS, BOSS]
+  const sprites = [...HERO_IDLE, ...HERO_SWING, ...MOBS, BOSS, ...MOB_STEPS, BOSS_STEP]
   for (const rows of sprites) {
     expect(rows.length).toBeLessThanOrEqual(9)
     expect(new Set(rows.map(row => row.length)).size).toBe(1)
     for (const c of rows.join('')) expect(c === '.' || PALETTE[c] !== undefined).toBe(true)
   }
   expect(MOBS.length).toBe(MOB_NAMES.length)
+  expect(TINTS.length).toBe(MOBS.length + 1)
+  // A second frame is its first's size, so the monster stands still on its spot.
+  for (const [i, rows] of [...MOBS, BOSS].entries()) {
+    const next = [...MOB_STEPS, BOSS_STEP][i] ?? []
+    expect([next.length, next[0]?.length]).toEqual([rows.length, rows[0]?.length])
+  }
   for (const glyph of Object.values(FONT)) expect(glyph.map(row => row.length)).toEqual([3, 3, 3, 3, 3])
 })
 

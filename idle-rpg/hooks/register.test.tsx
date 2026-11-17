@@ -731,3 +731,17 @@ test('sprites are ringed in the outline color, and the ring leaves the ground al
   expect(row(8).filter(c => c === ink).length).toBeGreaterThan(4)
   expect(row(9).filter(c => c === ink).length).toBe(0)
 })
+
+test('every monster in every stage color, both frames, draws nothing near white on a day sky', () => {
+  const cloud = hexOf(DAY_SCENE.star)
+  for (let kills = 0; kills < 60; kills++) {
+    for (const t of [0, 8]) {
+      for (const boss of [false, true]) {
+        const scene = newScene()
+        scene.t = t
+        const day = paintScene(scene, { kills, boss, left: 1 }, 72, 'light')
+        expect([kills, boss, [...new Set(day)].filter(c => c !== cloud && luminance(c) > 0.75)]).toEqual([kills, boss, []])
+      }
+    }
+  }
+})
