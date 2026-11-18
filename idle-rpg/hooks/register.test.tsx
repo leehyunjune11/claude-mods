@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 
 import type { IdleRpgSave as Save } from '../types'
 import { apply, autoAttack, fresh, join, levelOf, mobIndex, parseSave, questReward, stageOf, zoneOf } from './game'
-import { amount, bandLayout, fall, isMoving, newScene, paintScene, rowsOf, stepScene, trialTag, awayNote, news } from './register'
+import { amount, bandLayout, fall, isMoving, meetExaminer, newScene, paintScene, rowsOf, stepScene, trialTag, awayNote, news } from './register'
 import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, PALETTE, SCENE, ZONE_SCENES } from './sprites'
 
 const BAND = {
@@ -1161,7 +1161,7 @@ test('a fall drops the hits in flight and lays the hero flat a moment before the
   }
   expect(top(scene)).toBeGreaterThan(top(newScene()))
   scene.queue.push({ dmg: 1, crit: false, killed: false, boss: false, advanced: false })
-  for (let i = 0; i < 11; i++) stepScene(scene)
+  for (let i = 0; i < 7; i++) stepScene(scene)
   expect(scene.cur).toBeUndefined()
   stepScene(scene)
   stepScene(scene)
@@ -1200,4 +1200,18 @@ test('a reload over a save an older version held in the session fills the new fi
   await endTurn($)
   expect(JSON.stringify(world.store['s:sess-a'])).not.toContain('null')
   expect(saved(world)).toMatchObject({ kills: 95, best: 95 })
+})
+
+test('the examiner applied for walks in with its alarm; one already up, or arriving by a kill, does not walk again', () => {
+  const scene = newScene()
+  expect(meetExaminer(scene, true, false)).toBe(true)
+  expect(scene.enter).toBeGreaterThan(0)
+  expect(paintScene(scene, { kills: 0, boss: false, left: 1, exam: true }, 72)[1]).toBe(hexOf(SCENE.alarm))
+  const up = newScene()
+  meetExaminer(up, true, true)
+  expect(up.enter).toBe(0)
+  const walking = newScene()
+  walking.enter = 3
+  meetExaminer(walking, true, false)
+  expect(walking.enter).toBe(3)
 })

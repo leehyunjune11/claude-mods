@@ -129,7 +129,7 @@ const ENTER = 8 // frames a monster takes to walk in
 const FLOAT = 10
 const FX = 8 // frames a skill's effect plays, from the hit landing
 const QUEUE = 4
-const DOWN = 12 // frames the hero lies fallen after a failed fight: a second at the fast pace
+const DOWN = 8 // frames the hero lies fallen after a failed fight: 2 idle draws, 2/3 s at the fast pace
 
 const rgb = (hex: string) => Number.parseInt(hex.slice(1), 16)
 const colors = <T extends Record<string, string>>(hexes: T) =>
@@ -172,6 +172,15 @@ export type Scene = {
 }
 
 export const newScene = (): Scene => ({ t: 0, queue: [], swing: 0, flash: 0, enter: 0, fx: 0, walked: 0, down: 0, floats: [] })
+
+/**
+ * The examiner stepping in with no kill before it (a 전직 applied for) walks in as a monster does,
+ * its alarm with it. Says whether the examiner is up now, for the next frame to compare.
+ */
+export const meetExaminer = (s: Scene, exam: boolean, was: boolean) => {
+  if (exam && !was && s.enter === 0) s.enter = ENTER
+  return exam
+}
 
 /** A failed fight: the hits in flight are dropped, and the hero lies a moment before the next. */
 export const fall = (s: Scene) => {
@@ -383,8 +392,10 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
   }
 
   s.floats.forEach((f, n) => {
+    // Right of the monster, but kept on screen: a pet's room can push it past the edge.
+    const x0 = Math.min(MOB_X + wide + 2 + n * 2, cols - f.text.length * 4)
     ;[...f.text].forEach((digit, i) => {
-      sprite(FONT[digit] ?? [], MOB_X + wide + 2 + i * 4 + n * 2, f.y + H - 10, { ink: f.crit ? COLOR.crit : COLOR.damage, ring: false })
+      sprite(FONT[digit] ?? [], x0 + i * 4, f.y + H - 10, { ink: f.crit ? COLOR.crit : COLOR.damage, ring: false })
     })
   })
   return p
@@ -579,6 +590,7 @@ export const report = (x: Save) => {
 let scene = newScene()
 let cols = MAX_COLS
 let shownSkill: JobLine | undefined // the skill the band's line last named
+let shownExam = false // whether the last frame drew the examiner
 let drawn: Size = 'small' // the size the band last laid out: the frames between draw at it
 let band = ''
 let anim: Timer | undefined
@@ -870,7 +882,9 @@ const frame = async ($: EngineInterface) => {
     shownSkill = scene.cur?.skill
     $.ui.invalidate('ui.render')
   }
-  const shown = await $.ui.blit({ requestId: band, key: RASTER, cells: sceneCells(scene, viewOf(scene, x), cols, scheme(), drawn) })
+  const view = viewOf(scene, x)
+  shownExam = meetExaminer(scene, view.exam === true, shownExam)
+  const shown = await $.ui.blit({ requestId: band, key: RASTER, cells: sceneCells(scene, view, cols, scheme(), drawn) })
   // An old frame still in flight has no say over the timer that replaced it.
   if (anim !== mine) return
   if (!shown.deny) {
