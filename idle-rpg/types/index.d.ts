@@ -41,6 +41,10 @@ export type IdleRpgSave = {
   dmg: number
   /** How many times 체력 강화 was bought; a share like `enhance`. */
   vit: number
+  /** 치명타 확률, 치명타 피해 and 공격 속도 bought; shares like `enhance`. */
+  critRate: number
+  critDmg: number
+  haste: number
   /** The furthest `kills` ever reached: what the day's stage mission and the news count from. */
   best: number
   /** Damage the hero has taken since the stage began; at max hp the hero falls. */

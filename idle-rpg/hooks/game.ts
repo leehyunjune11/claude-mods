@@ -17,6 +17,12 @@ const FORGE_STEP = 0.05
 export const MAX_FORGE = 30
 const CRIT_HIT = 2.5
 const CRIT_CHANCE = 0.05
+/** 치명타 확률 adds this to the crit chance a level; 치명타 피해 this to the crit multiplier, added, not compounded. */
+const CRIT_RATE_STEP = 0.01
+const CRIT_DMG_STEP = 0.1
+/** 공격 속도 adds this to the attack rate a level; no job and no level swings faster than MIN_AUTO_MS. */
+const HASTE_STEP = 0.02
+const MIN_AUTO_MS = 300
 const FLURRY_CHANCE = 0.15
 const GREED_GOLD = 0.1
 // Each 강화 multiplies attack and its price alike. A stage asks 18% more attack and pays 12% more
@@ -132,6 +138,9 @@ export const fresh = (): Save => ({
   skills: perSkill(() => 0),
   dmg: 0,
   vit: 0,
+  critRate: 0,
+  critDmg: 0,
+  haste: 0,
   best: 0,
   hurt: 0,
   ms: 0,
@@ -147,8 +156,11 @@ export const trait = (save: Save, key: keyof Trait) => {
   const { line, tier } = jobOf(save)
   return (line && JOBS[line].traits[key]?.[tier]) ?? PLAIN[key]
 }
-/** Milliseconds between auto attacks. */
-export const autoMs = (save: Save) => trait(save, 'autoMs')
+/** Milliseconds between auto attacks: the job's, quickened by 공격 속도, whole. */
+export const autoMs = (save: Save) => Math.max(MIN_AUTO_MS, Math.round(trait(save, 'autoMs') / (1 + HASTE_STEP * save.haste)))
+/** The chance a hit is critical, and what a critical hit multiplies. */
+export const critChance = (save: Save) => Math.min(1, CRIT_CHANCE * save.skills.crit + trait(save, 'crit') / 100 + CRIT_RATE_STEP * save.critRate)
+export const critMult = (save: Save) => CRIT_HIT + CRIT_DMG_STEP * save.critDmg
 
 const expNeed = (level: number) => Math.round(300 * 1.22 ** (level - 1))
 
@@ -213,7 +225,8 @@ export const challengeStage = (save: Save) => stageOf(save.kills) + (save.lap > 
  * time, and the damage taken. The examiner's, while a trial is pending; else the whole stage's.
  */
 export const challenge = (save: Save) => {
-  const a = attack(save)
+  // What a swing deals on average, crits counted.
+  const a = attack(save) * (1 + critChance(save) * (critMult(save) - 1))
   const pace = autoMs(save)
   const fight = (hp: number, atk: number) => {
     const ms = Math.ceil(hp / a) * pace
@@ -253,7 +266,7 @@ const MISSION_KILLS = 300
 const MISSION_BONUS = 3
 
 /** The furthest stage reached, so a retreat and its retry count nothing; 강화 counts both kinds. */
-export const dayStart = (save: Save): DayStart => ({ stage: stageOf(save.best), enhance: save.enhance + save.vit, level: levelOf(save.exp) })
+export const dayStart = (save: Save): DayStart => ({ stage: stageOf(save.best), enhance: statCount(save), level: levelOf(save.exp) })
 
 /** How far a mission is, from the day's start: never below 0, nor past its need. */
 export const missionProgress = (id: MissionId, save: Save, from: DayStart) => {
@@ -267,10 +280,25 @@ export const missionReward = (save: Save) => Math.round(MOB_GOLD * stageReward(s
 export const missionBonus = (save: Save) => missionReward(save) * MISSION_BONUS
 
 const costAt = (enhance: number) => Math.round(50 * ENHANCE_COST ** enhance)
-/** 강화 raises attack; 체력 강화 (`vit`) max hp. Each climbs in price on its own count. */
-export type Stat = 'enhance' | 'vit'
-export const STAT_NAMES: Record<Stat, string> = { enhance: '강화', vit: '체력 강화' }
-export const enhanceCost = (save: Save, stat: Stat = 'enhance') => costAt(save[stat])
+/**
+ * What gold raises, each on its own count and its own climbing price: 강화 attack, 체력 강화 (`vit`)
+ * max hp, and three that stop at a cap or add rather than multiply, so none runs away with the
+ * stages: 치명타 확률, 치명타 피해, 공격 속도.
+ */
+export const STATS = ['enhance', 'vit', 'critRate', 'critDmg', 'haste'] as const
+export type Stat = (typeof STATS)[number]
+export const STAT_NAMES: Record<Stat, string> = { enhance: '강화', vit: '체력 강화', critRate: '치명타 확률', critDmg: '치명타 피해', haste: '공격 속도' }
+const STAT_PRICE: Record<Stat, { base: number; growth: number; max: number }> = {
+  enhance: { base: 50, growth: ENHANCE_COST, max: Infinity },
+  vit: { base: 50, growth: ENHANCE_COST, max: Infinity },
+  critRate: { base: 200, growth: 1.15, max: 40 },
+  critDmg: { base: 200, growth: 1.12, max: Infinity },
+  haste: { base: 200, growth: 1.15, max: 50 },
+}
+export const statMax = (stat: Stat) => STAT_PRICE[stat].max
+export const enhanceCost = (save: Save, stat: Stat = 'enhance') => Math.round(STAT_PRICE[stat].base * STAT_PRICE[stat].growth ** save[stat])
+/** Every stat bought, of every kind: what the day's 강화 mission and a catch-up's word count. */
+export const statCount = (save: Save) => STATS.reduce((sum, stat) => sum + save[stat], 0)
 /** What a 계열 변경 costs: the next LINE_CHANGE_ENHANCES 강화 together. */
 export const lineChangeCost = (save: Save) =>
   Array.from({ length: LINE_CHANGE_ENHANCES }, (_, i) => costAt(save.enhance + i)).reduce((sum, n) => sum + n, 0)
@@ -278,8 +306,8 @@ export const lineChangeCost = (save: Save) =>
 const examHp = (save: Save) => Math.round(stageHp(save) * BOSS_HP * EXAM_HP)
 
 const strike = (s: Save, times: number, rng: Rng, now: number): { save: Save; hit: Hit } => {
-  const crit = rng() < CRIT_CHANCE * s.skills.crit + trait(s, 'crit') / 100
-  const dmg = Math.round(attack(s) * times * (crit ? CRIT_HIT : 1))
+  const crit = rng() < critChance(s)
+  const dmg = Math.round(attack(s) * times * (crit ? critMult(s) : 1))
   const { boss, exam, hp } = foeOf(s)
   const tag = exam ? { exam: true as const } : {}
   // A merge can leave more damage than the monster now standing has hp: it then falls to this hit.
@@ -415,11 +443,13 @@ export const costExp = (lastUsd: number | undefined, usd: number, rate: number) 
   return { exp, lastUsd: exp === 0 ? lastUsd : Math.min(usd, lastUsd + exp / rate) }
 }
 
-/** One 강화, or with `max` as many as the gold buys, `keep` gold left over. */
 /** One 강화 of `stat`, or with `max` as many as the gold buys, `keep` gold left over. */
 export const enhance = (save: Save, max = false, keep = 0, stat: Stat = 'enhance'): Purchase => {
+  if (save[stat] >= statMax(stat)) return { refused: `${STAT_NAMES[stat]}은(는) 이미 최대(+${statMax(stat)})예요.` }
   let s = save
-  while (s.gold - enhanceCost(s, stat) >= keep && (max || s === save)) s = { ...s, gold: s.gold - enhanceCost(s, stat), [stat]: s[stat] + 1 }
+  while (s[stat] < statMax(stat) && s.gold - enhanceCost(s, stat) >= keep && (max || s === save)) {
+    s = { ...s, gold: s.gold - enhanceCost(s, stat), [stat]: s[stat] + 1 }
+  }
   if (s === save) {
     return { refused: `골드가 부족해요. ${STAT_NAMES[stat]}에는 ${enhanceCost(save, stat)}골드가 필요해요 (보유 ${Math.floor(save.gold)}).` }
   }
@@ -554,6 +584,9 @@ export const join = (a: Save, b: Save): Save => {
     skills: perSkill(id => a.skills[id] + b.skills[id]),
     dmg: at.dmg,
     vit: a.vit + b.vit,
+    critRate: a.critRate + b.critRate,
+    critDmg: a.critDmg + b.critDmg,
+    haste: a.haste + b.haste,
     best: Math.max(a.best, b.best),
     hurt: at.hurt,
     ms: at.ms,
@@ -571,6 +604,9 @@ export const share = (mine: Save, rest: Save): Save => ({
   gold: mine.gold - rest.gold,
   enhance: mine.enhance - rest.enhance,
   vit: mine.vit - rest.vit,
+  critRate: mine.critRate - rest.critRate,
+  critDmg: mine.critDmg - rest.critDmg,
+  haste: mine.haste - rest.haste,
   skills: perSkill(id => mine.skills[id] - rest.skills[id]),
 })
 
@@ -584,6 +620,10 @@ export const total = (rest: Save, own: Save): Save => {
     gold: Math.max(0, all.gold),
     enhance: Math.max(0, all.enhance),
     vit: Math.max(0, all.vit),
+    // Two sessions buying at once can pass a cap between them.
+    critRate: Math.min(statMax('critRate'), Math.max(0, all.critRate)),
+    critDmg: Math.max(0, all.critDmg),
+    haste: Math.min(statMax('haste'), Math.max(0, all.haste)),
     best: Math.max(all.best, all.kills),
     skills: perSkill(id => Math.min(MAX_SKILL, Math.max(0, all.skills[id]))),
   }
@@ -617,7 +657,7 @@ export const parseSave = (raw: unknown): Save => {
   // A save from before exp was whole may hold a fraction.
   const job = parseJob(raw.job)
   // Fields from before the fight: absent, or bad, each reads as where a fresh fight stands.
-  const { vit, best, hurt, ms, lap, moved, forge } = raw
+  const { vit, critRate, critDmg, haste, best, hurt, ms, lap, moved, forge } = raw
   const forged = isRecord(forge) && SLOTS.every(slot => isWhole(forge[slot], MAX_FORGE)) ? perSlot(slot => forge[slot] as number) : undefined
   return {
     v: 1,
@@ -629,6 +669,9 @@ export const parseSave = (raw: unknown): Save => {
     gear: perSlot(slot => gear[slot] as Rarity),
     skills: perSkill(id => skills[id] as number),
     vit: isShare(vit) ? vit : 0,
+    critRate: isShare(critRate) ? critRate : 0,
+    critDmg: isShare(critDmg) ? critDmg : 0,
+    haste: isShare(haste) ? haste : 0,
     best: Math.max(kills, isWhole(best) ? best : 0),
     hurt: isCount(hurt) ? hurt : 0,
     ms: isCount(ms) ? ms : 0,

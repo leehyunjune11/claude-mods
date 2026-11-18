@@ -30,6 +30,11 @@ import {
   costExp,
   enhance,
   autoEnhance,
+  critChance,
+  critMult,
+  STAT_NAMES,
+  statCount,
+  statMax,
   enhanceCost,
   foeOf,
   fresh,
@@ -62,7 +67,7 @@ import {
   total,
   trait,
 } from './game'
-import type { DayStart, Fail, GameEvent, Hit, Purchase } from './game'
+import type { DayStart, Fail, GameEvent, Hit, Purchase, Stat } from './game'
 import {
   BIG_BOSS,
   BIG_BOSS_STEP,
@@ -441,7 +446,7 @@ const examState = (x: Save) => (foeOf(x).exam ? `${EXAM_NAME}과 전투 중` : `
 
 const SKILL_HELP: Record<SkillId, string> = {
   flurry: '도구 호출 때 15%씩 한 번 더 강타',
-  crit: '5%씩 치명타 확률, 치명타는 2.5배',
+  crit: '5%씩 치명타 확률',
   greed: '골드 +10%씩',
 }
 
@@ -464,6 +469,25 @@ const jobText = (x: Save) => {
   return parts.join(' · ')
 }
 
+/** The stats past 강화 and 체력 강화, which 자동 leaves to the person. */
+const EXTRA_STATS = ['critRate', 'critDmg', 'haste'] as const
+const pct = (n: number) => `${Number((n * 100).toFixed(1))}%`
+/** What a stat does now, in words. */
+const STAT_EFFECT: Record<Stat, (x: Save) => string> = {
+  enhance: x => `공격력 ${amount(attack(x))}`,
+  vit: x => `최대 HP ${amount(maxHp(x))}`,
+  critRate: x => `치명타 확률 ${pct(critChance(x))}`,
+  critDmg: x => `치명타 피해 x${Number(critMult(x).toFixed(1))}`,
+  haste: x => `자동 공격 ${autoMs(x) / 1000}초마다`,
+}
+/** The three, with their levels and caps. */
+const statLine = (x: Save) =>
+  EXTRA_STATS.map(stat => `${STAT_EFFECT[stat](x)} (+${x[stat]}${statMax(stat) < Infinity ? `/${statMax(stat)}` : ''})`).join(' · ')
+/** A stat's next price, or 최대 at its cap. */
+const priceOf = (x: Save, stat: Stat) => (x[stat] >= statMax(stat) ? '최대' : `${amount(enhanceCost(x, stat))}골드`)
+/** /rpg's word for each stat. */
+const STAT_VERBS: Record<string, Stat> = { 강화: 'enhance', 체력: 'vit', 치명: 'critRate', 치피: 'critDmg', 속도: 'haste' }
+
 export const report = (x: Save) => {
   const { level, into, need } = levelInfo(x.exp)
   const gear = SLOTS.map(slot => {
@@ -475,16 +499,20 @@ export const report = (x: Save) => {
     `직업: ${jobText(x)}`,
     `스테이지 ${stageLabel(x)} (${zoneName(x)}) · ${clock(x)} · 상대: ${foe(x)}${lapNote(x) && ` · ${lapNote(x)}`}`,
     `골드 ${amount(x.gold)} · 공격력 ${amount(attack(x))} · 강화 +${x.enhance} · ${hpText(x)} · 체력 강화 +${x.vit}`,
+    `능력치: ${statLine(x)}`,
     `장비: ${gear.join(' · ')}`,
     ...(missionLine(x) ? [`오늘의 미션: ${missionLine(x)}`] : []),
     `스킬 (남은 포인트 ${skillPoints(x)}): ${SKILLS.map(id => `${SKILL_NAMES[id]} ${x.skills[id]}/${MAX_SKILL}`).join(' · ')}`,
-    `다음 강화: ${amount(enhanceCost(x))}골드 · 체력 강화: ${amount(enhanceCost(x, 'vit'))}골드 · 뽑기: ${GACHA_COST}골드`,
+    `다음 강화: ${amount(enhanceCost(x))}골드 · 체력 강화: ${amount(enhanceCost(x, 'vit'))}골드 · ${EXTRA_STATS.map(stat => `${STAT_NAMES[stat]}: ${priceOf(x, stat)}`).join(' · ')} · 뽑기: ${GACHA_COST}골드`,
     `스테이지마다 ${STAGE_MS / 1000}초 안에 10마리를 잡아야 해요. 시간이 지나거나 쓰러지면 이전 스테이지로 후퇴해 한 바퀴 돈 뒤 다시 도전해요.`,
     '',
     '명령',
     '  /rpg 강화: 공격력 10% 증가 (한 번)',
     '  /rpg 강화 최대: 골드가 되는 만큼 강화',
     '  /rpg 체력 [최대]: 최대 HP 10% 증가 (한 번, 또는 골드가 되는 만큼)',
+    `  /rpg 치명 [최대]: 치명타 확률 +1%p (최대 +${statMax('critRate')})`,
+    '  /rpg 치피 [최대]: 치명타 피해 +0.1배',
+    `  /rpg 속도 [최대]: 공격 속도 +2% (최대 +${statMax('haste')})`,
     '  /rpg 도전: 반복 사냥 중에 남은 바퀴를 건너뛰고 바로 다시 도전',
     '  /rpg 뽑기: 무작위 장비 (일반 60% · 희귀 28% · 영웅 10% · 전설 2%)',
     ...SKILLS.map(id => `  /rpg 스킬 ${SKILL_NAMES[id]}: ${SKILL_HELP[id]}`),
@@ -705,7 +733,7 @@ const play = async ($: EngineInterface, event: GameEvent, away?: { ms: number; l
   scene.queue = [...scene.queue, ...hits].slice(-QUEUE)
   if (event.type === 'tick' && (away || event.ms >= AWAY_MS)) {
     const { ms, label } = away ?? { ms: event.ms, label: '자리 비운' }
-    const bought = after.enhance + after.vit - before.enhance - before.vit
+    const bought = statCount(after) - statCount(before)
     const note = awayNote(ms, hits, earned, after.exp - before.exp, bought, label, fails.length) + (away?.tail ?? '')
     $.ui.toast(note)
     await update($, pane, p => ({ ...p, note }))
@@ -862,18 +890,12 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
   if (verb === '테마') return setTheme($, arg)
   if (verb === '크기') return setSize($, arg)
   if (verb === '자동') return setAuto($, arg)
-  if (verb === '강화') {
-    const before = (await read($, save)).enhance
-    return settle(await buy($, x => enhance(x, arg === '최대')), x => {
-      const count = x.enhance - before
-      return `강화 +${x.enhance} 성공${count > 1 ? ` (${count}번)` : ''}! 공격력 ${amount(attack(x))}. ${goldLeft(x)}`
-    })
-  }
-  if (verb === '체력') {
-    const before = (await read($, save)).vit
-    return settle(await buy($, x => enhance(x, arg === '최대', 0, 'vit')), x => {
-      const count = x.vit - before
-      return `체력 강화 +${x.vit} 성공${count > 1 ? ` (${count}번)` : ''}! 최대 HP ${amount(maxHp(x))}. ${goldLeft(x)}`
+  const stat = STAT_VERBS[verb]
+  if (stat) {
+    const before = (await read($, save))[stat]
+    return settle(await buy($, x => enhance(x, arg === '최대', 0, stat)), x => {
+      const count = x[stat] - before
+      return `${STAT_NAMES[stat]} +${x[stat]} 성공${count > 1 ? ` (${count}번)` : ''}! ${STAT_EFFECT[stat](x)}. ${goldLeft(x)}`
     })
   }
   if (verb === '뽑기') {
@@ -1042,8 +1064,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'rpg',
-      description: '방치형 RPG: 상태·메뉴 보기, 강화, 체력 강화, 보스 도전, 뽑기, 스킬, 전직',
-      argumentHint: '[강화 [최대] | 체력 [최대] | 도전 | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
+      description: '방치형 RPG: 상태·메뉴 보기, 강화, 체력 강화, 치명타·공격 속도, 보스 도전, 뽑기, 스킬, 전직',
+      argumentHint: '[강화 [최대] | 체력 [최대] | 치명·치피·속도 [최대] | 도전 | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
     })
     const kept = await $.store.get('theme')
     theme = THEMES.find(t => t === kept) ?? 'system'
@@ -1145,6 +1167,11 @@ export const register: Register = on => {
           {key('v', '체력 최대', '체력 최대')}
           {key('u', `자동 강화: ${auto ? '켜짐' : '꺼짐'}`, '자동')}
           {key('g', `뽑기 (${GACHA_COST})`, '뽑기')}
+        </Box>
+        <Box columnGap={2} flexWrap="wrap">
+          {key('i', `치명타 확률 +${x.critRate} (${priceOf(x, 'critRate')})`, '치명')}
+          {key('o', `치명타 피해 +${x.critDmg} (${priceOf(x, 'critDmg')})`, '치피')}
+          {key('p', `공격 속도 +${x.haste} (${priceOf(x, 'haste')})`, '속도')}
         </Box>
         <Box columnGap={2} flexWrap="wrap">
           <Text>스킬 (포인트 {skillPoints(x)}):</Text>

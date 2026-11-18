@@ -9,6 +9,8 @@ import {
   applyJob,
   attack,
   autoAttack,
+  autoMs,
+  critChance,
   changeLine,
   costExp,
   enhance,
@@ -579,4 +581,29 @@ test('보스 도전 skips the rest of a lap to where its end would leave the her
   const exam = bought(challengeNow(having({ kills: 0, lap: 10, job: { line: null, tier: 0, trial, at: 1 } }), 2))
   expect(exam.kills).toBe(10)
   expect(foeOf(exam).exam).toBe(true)
+})
+
+test('치명타 확률, 치명타 피해 and 공격 속도: each its own price, the two capped, the swing never under 300ms', () => {
+  const rich = having({ gold: 1e12 })
+  const crit = bought(enhance(rich, true, 0, 'critRate'))
+  expect(crit.critRate).toBe(40)
+  expect(enhance(crit, false, 0, 'critRate')).toEqual({ refused: expect.stringContaining('이미 최대(+40)') })
+  expect(critChance(crit)).toBe(0.4)
+  // A sure crit: 2.5x, and 0.1 more for each 치명타 피해.
+  const sure = { ...rich, critRate: 100, critDmg: 5 }
+  expect(apply(sure, { type: 'tick', ms: 1500 }, rolls(0.5)).hits[0]?.dmg).toBe(Math.round(attack(sure) * 3))
+  expect(enhanceCost(rich, 'critDmg')).toBe(200)
+  const fast = bought(enhance(rich, true, 0, 'haste'))
+  expect(fast.haste).toBe(50)
+  expect(autoMs(fast)).toBe(750)
+  expect(autoMs({ ...fast, job: { line: 'ranged', tier: 3, at: 0 } })).toBe(425)
+  expect(autoMs({ ...fast, haste: 500, job: { line: 'ranged', tier: 3, at: 0 } })).toBe(300)
+  // Shares add; two sessions buying at once are held to the cap.
+  const a = having({ critRate: 30, haste: 30, critDmg: 4 })
+  expect(total(a, a)).toMatchObject({ critRate: 40, haste: 50, critDmg: 8 })
+  expect(share(total(a, a), a)).toMatchObject({ critDmg: 4 })
+  // A save from before them reads them as none.
+  const { critRate, critDmg, haste, ...old } = a
+  expect(parseSave(old)).toMatchObject({ critRate: 0, critDmg: 0, haste: 0 })
+  expect(dayStart(a).enhance).toBe(64)
 })
