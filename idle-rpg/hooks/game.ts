@@ -516,6 +516,48 @@ export const gacha = (save: Save, rng: Rng): Purchase => {
   }
 }
 
+// --- 던전: a day's few free runs, each a minute against the furthest stage's monsters, one after
+// another, till the time is up or the hero falls. The run pays one kind, DUNGEON_REWARD times over,
+// and never moves the hero.
+
+export const DUNGEON_MS = 60_000
+export const DUNGEON_RUNS = 2
+const DUNGEON_REWARD = 5
+export const DUNGEONS = ['gold', 'exp'] as const
+export type Dungeon = (typeof DUNGEONS)[number]
+export const DUNGEON_NAMES: Record<Dungeon, string> = { gold: '골드 던전', exp: '경험치 던전' }
+
+/** A run: its kills, how long the hero lasted, whether it fell, and the pay, at the auto pace. */
+export const dungeon = (save: Save, kind: Dungeon, rng: Rng) => {
+  const stage = stageOf(save.best)
+  const hp = Math.round(hpAt(stage))
+  const atk = Math.round(atkAt(stage))
+  const pace = autoMs(save)
+  const swing = attack(save) * (1 + petPower(save))
+  let ms = 0
+  let hurt = 0
+  let dmg = 0
+  let kills = 0
+  let fell = false
+  while (ms + pace <= DUNGEON_MS) {
+    hurt += (Math.floor((ms + pace) / MOB_HIT_MS) - Math.floor(ms / MOB_HIT_MS)) * atk
+    ms += pace
+    if (hurt >= maxHp(save)) {
+      fell = true
+      break
+    }
+    dmg += swing * (rng() < critChance(save) ? critMult(save) : 1)
+    if (dmg >= hp) {
+      kills++
+      dmg = 0
+    }
+  }
+  const reward = kills * REWARD_GROWTH ** (stage - 1) * DUNGEON_REWARD
+  const gold = kind === 'gold' ? Math.round(MOB_GOLD * reward * gearMult(save, 'armor') * (1 + GREED_GOLD * save.skills.greed) * trait(save, 'gold')) : 0
+  const exp = kind === 'exp' ? Math.round(MOB_EXP * reward * gearMult(save, 'ring') * trait(save, 'exp')) : 0
+  return { kills, ms, fell, gold, exp }
+}
+
 /** 펫 뽑기: a pet of a rolled rarity; better than the one kept, it comes; else the kept one levels. */
 export const petGacha = (save: Save, rng: Rng): Purchase => {
   if (save.gold < PET_COST) return { refused: `골드가 부족해요. 펫 뽑기에는 ${PET_COST}골드가 필요해요 (보유 ${Math.floor(save.gold)}).` }

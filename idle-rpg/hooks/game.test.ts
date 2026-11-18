@@ -10,6 +10,7 @@ import {
   attack,
   autoAttack,
   autoMs,
+  dungeon,
   petGacha,
   petPower,
   PET_COST,
@@ -632,4 +633,17 @@ test('펫 뽑기: a rarer pet comes, one no better levels the kept one, and the 
   expect(join(having({ pet: { rarity: 3, level: 4 } }), having({})).pet).toEqual({ rarity: 3, level: 4 })
   expect(parseSave(having({ pet: { rarity: 5 as never, level: 0 } })).pet).toBeUndefined()
   expect(parseSave(having({ pet: { rarity: 2, level: 3 } })).pet).toEqual({ rarity: 2, level: 3 })
+})
+
+test('a 던전 run fights the furthest stage for a minute or till the hero falls, pays one kind five times over, and leaves the hero be', () => {
+  const hero = having({ kills: 0, best: 0 })
+  const run = dungeon(hero, 'gold', never)
+  // Stage 1: 25 hp, 10 a swing, so a kill each third swing of 1.5s; 40 swings in the minute.
+  expect(run).toMatchObject({ kills: 13, ms: 60_000, fell: false, gold: 13 * 5 * 5, exp: 0 })
+  expect(dungeon(hero, 'exp', never)).toMatchObject({ gold: 0, exp: 13 * 6 * 5 })
+  // Far past its strength, it falls early and is paid for what it felled.
+  const weak = dungeon(having({ best: 300 }), 'gold', never)
+  expect(weak.fell).toBe(true)
+  expect(weak.ms).toBeLessThan(60_000)
+  expect(weak.kills).toBe(0)
 })

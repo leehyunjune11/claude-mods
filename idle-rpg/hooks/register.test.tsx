@@ -1107,3 +1107,20 @@ test('a pet stands at the hero\'s back, in both sizes, and the hero and the mons
     expect(withPet).not.toEqual(plain)
   }
 })
+
+test('/rpg 던전 runs each kind twice a day, pays without moving the hero, and opens again the next day', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on, { save: stored({ kills: 5, best: 5 }), ...DONE_TODAY })
+  await start($)
+  expect(await rpg($, '던전')).toContain('골드 던전 2/2 · 경험치 던전 2/2')
+  const first = await rpg($, '던전 골드')
+  expect(first).toMatch(/골드 던전: 60초 동안 몬스터 \d+마리 처치 · 골드 \+\d+ \(오늘 남은 입장 1번\)/)
+  expect(world.toasts).toContain(first)
+  expect(saved(world).gold).toBeGreaterThan(0)
+  expect(saved(world).kills).toBe(5)
+  await rpg($, '던전 골드')
+  expect(await rpg($, '던전 골드')).toContain('다 들어갔어요')
+  expect(await rpg($, '던전 경험치')).toContain('경험치 +')
+  await clock.advance(24 * 3_600_000)
+  expect(await rpg($, '던전')).toContain('골드 던전 2/2')
+})

@@ -9,6 +9,11 @@ import {
   EXP_PER_USD,
   GACHA_COST,
   PET_COST,
+  DUNGEON_MS,
+  DUNGEON_NAMES,
+  DUNGEON_RUNS,
+  DUNGEONS,
+  dungeon,
   PET_NAMES,
   petGacha,
   petPower,
@@ -71,7 +76,7 @@ import {
   total,
   trait,
 } from './game'
-import type { DayStart, Fail, GameEvent, Hit, Purchase, Stat } from './game'
+import type { DayStart, Dungeon, Fail, GameEvent, Hit, Purchase, Stat } from './game'
 import {
   BIG_BOSS,
   BIG_BOSS_STEP,
@@ -532,6 +537,7 @@ export const report = (x: Save) => {
     `  /rpg 치명 [최대]: 치명타 확률 +1%p (최대 +${statMax('critRate')})`,
     '  /rpg 치피 [최대]: 치명타 피해 +0.1배',
     `  /rpg 속도 [최대]: 공격 속도 +2% (최대 +${statMax('haste')})`,
+    `  /rpg 던전 <골드|경험치>: 하루 ${DUNGEON_RUNS}번씩, 가장 멀리 간 스테이지 몬스터를 ${DUNGEON_MS / 1000}초 동안 사냥해 5배 보상`,
     '  /rpg 도전: 반복 사냥 중에 남은 바퀴를 건너뛰고 바로 다시 도전',
     `  /rpg 펫: 펫 뽑기 ${PET_COST}골드 (같거나 낮은 등급이 나오면 지금 펫 레벨 +1)`,
     '  /rpg 뽑기: 무작위 장비 (일반 60% · 희귀 28% · 영웅 10% · 전설 2%)',
@@ -939,6 +945,7 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
     if (!id) return `스킬 이름을 적어 주세요: ${SKILLS.map(s => SKILL_NAMES[s]).join(', ')}`
     return settle(await buy($, x => learn(x, id)), (x, note) => `${note} 습득! 남은 포인트 ${skillPoints(x)}.`)
   }
+  if (verb === '던전') return enterDungeon($, arg)
   if (verb === '도전') {
     const now = await $.clock.now()
     return settle(await buy($, x => challengeNow(x, now)), (_, note) => note)
@@ -1058,6 +1065,38 @@ const checkDaily = async ($: EngineInterface) => {
   $.ui.invalidate('ui.render')
 }
 
+// --- 던전: the day's runs used, in the store under DUNGEON apart from DAILY, which older versions rewrite.
+// ponytail: as the missions, two sessions entering in the same instant can both run the last one.
+
+const DUNGEON = 'dungeon'
+type Runs = { day: string; used: Record<Dungeon, number> }
+
+const parseRuns = (raw: unknown, day: string): Runs => {
+  const kept = raw as Partial<Runs> | null
+  const used: Partial<Record<Dungeon, unknown>> = kept?.day === day && typeof kept.used === 'object' && kept.used !== null ? kept.used : {}
+  return { day, used: { gold: Number(used.gold) || 0, exp: Number(used.exp) || 0 } }
+}
+
+/** One run: counted before it pays, so a failed write pays nothing rather than twice. */
+const enterDungeon = async ($: EngineInterface, arg: string) => {
+  const kind = DUNGEONS.find(k => DUNGEON_NAMES[k].startsWith(arg) && arg !== '')
+  const runs = parseRuns(await $.store.get(DUNGEON), dayOf(await $.clock.now()))
+  const left = (k: Dungeon) => DUNGEON_RUNS - runs.used[k]
+  const status = DUNGEONS.map(k => `${DUNGEON_NAMES[k]} ${left(k)}/${DUNGEON_RUNS}`).join(' · ')
+  if (!kind) return `던전을 골라 주세요: /rpg 던전 골드 · /rpg 던전 경험치 (오늘 남은 입장: ${status})`
+  if (left(kind) <= 0) return `오늘 ${DUNGEON_NAMES[kind]}은 다 들어갔어요. 내일 다시 열려요.`
+  const used = { ...runs.used, [kind]: runs.used[kind] + 1 }
+  await $.store.set(DUNGEON, { ...runs, used })
+  const run = dungeon(await read($, save), kind, Math.random)
+  await play($, { type: 'reward', exp: run.exp, gold: run.gold })
+  await sync($, false)
+  const paid = kind === 'gold' ? `골드 +${amount(run.gold)}` : `경험치 +${amount(run.exp)}`
+  const lasted = run.fell ? `${Math.round(run.ms / 1000)}초 만에 쓰러지기까지` : `${DUNGEON_MS / 1000}초 동안`
+  const note = `${DUNGEON_NAMES[kind]}: ${lasted} 몬스터 ${amount(run.kills)}마리 처치 · ${paid} (오늘 남은 입장 ${DUNGEON_RUNS - used[kind]}번)`
+  $.ui.toast(note)
+  return note
+}
+
 /** Advance, read the other rows in, then the command: what /rpg and every pane press go through. */
 const run = async ($: EngineInterface, args: string) => {
   await advance($)
@@ -1092,8 +1131,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'rpg',
-      description: '방치형 RPG: 상태·메뉴 보기, 강화, 체력 강화, 치명타·공격 속도, 보스 도전, 뽑기, 펫, 스킬, 전직',
-      argumentHint: '[강화 [최대] | 체력 [최대] | 치명·치피·속도 [최대] | 도전 | 뽑기 | 펫 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
+      description: '방치형 RPG: 상태·메뉴 보기, 강화, 체력 강화, 치명타·공격 속도, 보스 도전, 던전, 뽑기, 펫, 스킬, 전직',
+      argumentHint: '[강화 [최대] | 체력 [최대] | 치명·치피·속도 [최대] | 도전 | 던전 <골드|경험치> | 뽑기 | 펫 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
     })
     const kept = await $.store.get('theme')
     theme = THEMES.find(t => t === kept) ?? 'system'
@@ -1198,6 +1237,10 @@ export const register: Register = on => {
           {key('u', `자동 강화: ${auto ? '켜짐' : '꺼짐'}`, '자동')}
           {key('g', `뽑기 (${GACHA_COST})`, '뽑기')}
           {key('k', `펫 뽑기 (${PET_COST})`, '펫')}
+        </Box>
+        <Box columnGap={2} flexWrap="wrap">
+          {key('d', '골드 던전', '던전 골드')}
+          {key('f', '경험치 던전', '던전 경험치')}
         </Box>
         <Box columnGap={2} flexWrap="wrap">
           {key('i', `치명타 확률 +${x.critRate} (${priceOf(x, 'critRate')})`, '치명')}
