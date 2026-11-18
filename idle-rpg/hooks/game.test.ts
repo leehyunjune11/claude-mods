@@ -267,7 +267,7 @@ test('환생 from stage 100 starts over as an 인턴, keeps gear, 합성 and the
   const pet = { rarity: 2 as const, level: 3 }
   const far = having({ kills: 1000, best: 1000, exp: 1e9, gold: 1e12, enhance: 300, vit: 40, haste: 10, gear, forge, pet, skills: { flurry: 5, crit: 5, greed: 5 }, job: { line: 'melee', tier: 3, at: 1 } })
   const born = bought(rebirth(far, 77))
-  expect(born).toEqual({ ...fresh(), gear, forge, pet, moved: 77, rebirth: { count: 1, points: 10 } })
+  expect(born).toEqual({ ...fresh(), gear, forge, pet, moved: 77, rebirth: { count: 1, points: 10, top: 1000 } })
   // Stage 101 gives ten points: twice the attack and the gold of the same hero never reborn.
   const plain = { ...born, rebirth: undefined }
   expect(rebirthBonus(born)).toBe(2)
@@ -275,13 +275,15 @@ test('환생 from stage 100 starts over as an 인턴, keeps gear, 합성 and the
   expect(Math.abs(attack(born) - attack(plain) * 2)).toBeLessThanOrEqual(1)
   expect(Math.abs(questReward(born, 10).gold - questReward(plain, 10).gold * 2)).toBeLessThanOrEqual(1)
   // A second one adds its points to the first's.
-  expect(bought(rebirth({ ...born, best: 1500, kills: 1500 }, 78)).rebirth).toEqual({ count: 2, points: 25 })
-  expect(parseSave(JSON.parse(JSON.stringify(born))).rebirth).toEqual({ count: 1, points: 10 })
-  expect(parseSave({ ...born, rebirth: { count: 0, points: 3 } }).rebirth).toBeUndefined()
+  expect(bought(rebirth({ ...born, best: 1500, kills: 1500 }, 78)).rebirth).toEqual({ count: 2, points: 25, top: 1500 })
+  expect(parseSave(JSON.parse(JSON.stringify(born))).rebirth).toEqual({ count: 1, points: 10, top: 1000 })
+  // 뽑기 still costs what stage 101 pays, not stage 1.
+  expect(gachaCost(born)).toBe(gachaCost(far))
+  expect(parseSave({ ...born, rebirth: { count: 0, points: 3, top: 0 } }).rebirth).toBeUndefined()
 
   // A row from before the 환생 brings only what it kept, whichever side of the join it is on.
   const before = { ...far, gear: { weapon: 1, armor: 4, ring: 2 } as const, moved: 999 }
-  const both = { ...fresh(), gear: { weapon: 4, armor: 4, ring: 2 }, forge, pet, moved: 77, rebirth: { count: 1, points: 10 } }
+  const both = { ...fresh(), gear: { weapon: 4, armor: 4, ring: 2 }, forge, pet, moved: 77, rebirth: { count: 1, points: 10, top: 1000 } }
   expect(join(before, born)).toEqual(both)
   expect(join(born, before)).toEqual(both)
   // And this save's row owes nothing to shares from before it.

@@ -602,7 +602,7 @@ test('환생 asks first, then starts over for good, and a row from before it add
   const note = await rpg($, '환생 확인')
   expect(note).toContain('1번째 환생! 포인트 +10')
   expect(world.toasts).toContain(note)
-  expect(saved(world)).toMatchObject({ kills: 0, best: 0, gold: 0, enhance: 0, gear: { weapon: 4 }, rebirth: { count: 1, points: 10 } })
+  expect(saved(world)).toMatchObject({ kills: 0, best: 0, gold: 0, enhance: 0, gear: { weapon: 4 }, rebirth: { count: 1, points: 10, top: 1000 } })
   expect(world.store.daily.from).toEqual({ stage: 1, enhance: 0, level: 1 })
   // Another session's row from before it, still rich, rescanned: its gold stays gone.
   world.store['s:sess-b'] = stored({ kills: 990, best: 990, gold: 9000, enhance: 20, moved: NOON + 5 })
@@ -611,7 +611,7 @@ test('환생 asks first, then starts over for good, and a row from before it add
   expect(await rpg($, '환생')).toContain('스테이지 100')
 
   // The pane: [n] steps to the tab, [z] asks, [y] does it.
-  world.store['s:sess-c'] = stored({ kills: 1500, best: 1500, moved: NOON + 9, rebirth: { count: 1, points: 10 } })
+  world.store['s:sess-c'] = stored({ kills: 1500, best: 1500, moved: NOON + 9, rebirth: { count: 1, points: 10, top: 1000 } })
   await rpg($)
   const ui = await $.ui.mount(PANE)
   for (let i = 0; i < 3; i++) {
@@ -622,7 +622,7 @@ test('환생 asks first, then starts over for good, and a row from before it add
   await ui.press({ key: '환생' })
   await ui.redraw()
   await ui.press({ key: '환생 확인' })
-  expect(saved(world).rebirth).toEqual({ count: 2, points: 25 })
+  expect(saved(world).rebirth).toEqual({ count: 2, points: 25, top: 1500 })
   await ui.unmount()
 })
 

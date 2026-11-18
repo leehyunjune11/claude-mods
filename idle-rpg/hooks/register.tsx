@@ -1190,6 +1190,7 @@ let sure = false
 const LINE_KEYS: Record<JobLine, string> = { melee: 'q', magic: 'w', ranged: 'r', rogue: 'a' }
 
 const openPane = async ($: EngineInterface) => {
+  sure = false
   await update($, pane, p => ({ ...p, picking: false }))
   return $.ui.open({ id: PANE, title: 'RPG', focus: true, closeOnEscape: true })
 }

@@ -70,10 +70,11 @@ export type IdleRpgSave = {
    * one. Absolute like the gear: rows join it by the higher rarity, then level. Absent: none.
    */
   /**
-   * 환생 so far: how many, and the points they gave. Rows join it by the higher count, and a row
+   * 환생 so far: how many, the points they gave, and the furthest `kills` before the last, which
+   * 뽑기 prices keep. Rows join it by the higher count, and a row
    * from a lower count brings only what a 환생 keeps (gear, 합성, the pet). Absent = never.
    */
-  rebirth?: { count: number; points: number }
+  rebirth?: { count: number; points: number; top: number }
   pet?: { rarity: 1 | 2 | 3 | 4; level: number }
 }
 

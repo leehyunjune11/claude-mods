@@ -60,9 +60,10 @@ export const MAX_PET_LEVEL = 30
 const PET_POWER = [0, 0.1, 0.2, 0.35, 0.6] as const
 /**
  * 뽑기 and 펫 뽑기 cost their base times what a monster of the furthest stage pays, so a pull costs
- * about as many kills deep in as at the start; a refund keeps its share of it.
+ * about as many kills deep in as at the start; a refund keeps its share of it. A 환생 keeps the
+ * furthest reach before it for this, or the pulls it keeps would come at stage 1's price.
  */
-const priceAt = (save: Save, base: number) => Math.round(base * REWARD_GROWTH ** (stageOf(save.best) - 1))
+const priceAt = (save: Save, base: number) => Math.round(base * REWARD_GROWTH ** (stageOf(Math.max(save.best, rebirthOf(save).top)) - 1))
 export const gachaCost = (save: Save) => priceAt(save, GACHA_COST)
 export const petCost = (save: Save) => priceAt(save, PET_COST)
 const PET_STEP = 0.05
@@ -531,7 +532,7 @@ export const gacha = (save: Save, rng: Rng): Purchase => {
 export const REBIRTH_STAGE = 100
 const REBIRTH_POWER = 0.1
 
-export const rebirthOf = (save: Save) => save.rebirth ?? { count: 0, points: 0 }
+export const rebirthOf = (save: Save) => save.rebirth ?? { count: 0, points: 0, top: 0 }
 /** What a 환생 now would give: a point for each ten stages of the furthest reach. */
 export const rebirthGain = (save: Save) => Math.floor(stageOf(save.best) / 10)
 export const rebirthBonus = (save: Save) => 1 + REBIRTH_POWER * rebirthOf(save).points
@@ -549,7 +550,7 @@ export const rebirth = (save: Save, now: number): Purchase => {
     return { refused: `환생은 스테이지 ${REBIRTH_STAGE}에 닿으면 할 수 있어요 (최고 스테이지 ${stageOf(save.best)}).` }
   }
   const was = rebirthOf(save)
-  const next = { ...carried(save), moved: now, rebirth: { count: was.count + 1, points: was.points + rebirthGain(save) } }
+  const next = { ...carried(save), moved: now, rebirth: { count: was.count + 1, points: was.points + rebirthGain(save), top: Math.max(was.top, save.best) } }
   return {
     save: next,
     note: `${next.rebirth.count}번째 환생! 포인트 +${rebirthGain(save)} · 공격력과 골드가 영구히 x${Number(rebirthBonus(next).toFixed(1))}. 장비·합성·펫은 그대로예요.`,
@@ -793,8 +794,8 @@ export const parseSave = (raw: unknown): Save => {
   const job = parseJob(raw.job)
   // Fields from before the fight: absent, or bad, each reads as where a fresh fight stands.
   const { vit, critRate, critDmg, haste, best, hurt, ms, lap, moved, forge, pet, rebirth } = raw
-  const reborn = isRecord(rebirth) && isWhole(rebirth.count) && rebirth.count > 0 && isWhole(rebirth.points)
-    ? { count: rebirth.count, points: rebirth.points }
+  const reborn = isRecord(rebirth) && isWhole(rebirth.count) && rebirth.count > 0 && isWhole(rebirth.points) && isWhole(rebirth.top)
+    ? { count: rebirth.count, points: rebirth.points, top: rebirth.top }
     : undefined
   const kept = isRecord(pet) && isWhole(pet.rarity, 4) && pet.rarity > 0 && isWhole(pet.level, MAX_PET_LEVEL)
     ? { rarity: pet.rarity as 1 | 2 | 3 | 4, level: pet.level }
