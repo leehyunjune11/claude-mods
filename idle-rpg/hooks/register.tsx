@@ -25,6 +25,7 @@ import {
   attack,
   autoAttack,
   autoMs,
+  challengeNow,
   changeLine,
   costExp,
   enhance,
@@ -484,6 +485,7 @@ export const report = (x: Save) => {
     '  /rpg 강화: 공격력 10% 증가 (한 번)',
     '  /rpg 강화 최대: 골드가 되는 만큼 강화',
     '  /rpg 체력 [최대]: 최대 HP 10% 증가 (한 번, 또는 골드가 되는 만큼)',
+    '  /rpg 도전: 반복 사냥 중에 남은 바퀴를 건너뛰고 바로 다시 도전',
     '  /rpg 뽑기: 무작위 장비 (일반 60% · 희귀 28% · 영웅 10% · 전설 2%)',
     ...SKILLS.map(id => `  /rpg 스킬 ${SKILL_NAMES[id]}: ${SKILL_HELP[id]}`),
     '  /rpg 전직 [근접|마법|원거리|암살]: Lv.10·30·60부터 전직 시험 신청 (인턴은 계열을 골라요)',
@@ -887,6 +889,10 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
     if (!id) return `스킬 이름을 적어 주세요: ${SKILLS.map(s => SKILL_NAMES[s]).join(', ')}`
     return settle(await buy($, x => learn(x, id)), (x, note) => `${note} 습득! 남은 포인트 ${skillPoints(x)}.`)
   }
+  if (verb === '도전') {
+    const now = await $.clock.now()
+    return settle(await buy($, x => challengeNow(x, now)), (_, note) => note)
+  }
   if (verb === '전직' || verb === '계열') {
     const now = await $.clock.now()
     const move = verb === '전직' ? applyJob : changeLine
@@ -1036,8 +1042,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'rpg',
-      description: '방치형 RPG: 상태·메뉴 보기, 강화, 체력 강화, 뽑기, 스킬, 전직',
-      argumentHint: '[강화 [최대] | 체력 [최대] | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
+      description: '방치형 RPG: 상태·메뉴 보기, 강화, 체력 강화, 보스 도전, 뽑기, 스킬, 전직',
+      argumentHint: '[강화 [최대] | 체력 [최대] | 도전 | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
     })
     const kept = await $.store.get('theme')
     theme = THEMES.find(t => t === kept) ?? 'system'
@@ -1124,7 +1130,12 @@ export const register: Register = on => {
           골드 {amount(x.gold)} · 공격력 {amount(attack(x))} · 강화 +{x.enhance} · {hpText(x)} · 체력 강화 +{x.vit}
           {canApply(x) && <Text color={SCENE.crit}> · 전직 가능</Text>}
         </Text>
-        {lapNote(x) !== '' && <Text color={SCENE.crit}>{lapNote(x)}</Text>}
+        {lapNote(x) !== '' && (
+          <Box columnGap={2}>
+            <Text color={SCENE.crit}>{lapNote(x)}</Text>
+            {key('b', '지금 도전', '도전')}
+          </Box>
+        )}
         {missionLine(x) !== '' && <Text>오늘의 미션: {missionLine(x)}</Text>}
         <Text>장비: {SLOTS.map(slot => `${SLOT_NAMES[slot]} ${RARITY_NAMES[x.gear[slot]]}${stars(x, slot)}`).join(' · ')}</Text>
         <Box columnGap={2} flexWrap="wrap">

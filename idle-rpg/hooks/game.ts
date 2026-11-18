@@ -326,6 +326,15 @@ const retreat = (s: Save, exam: boolean, now: number): Save => {
   return { ...s, kills: (back - 1) * KILLS_PER_STAGE, best: Math.max(s.best, s.kills), lap, dmg: 0, hurt: 0, ms: 0, moved: now }
 }
 
+/** 보스 도전: the rest of a retreat lap skipped, the hero where its end would leave it, challenging. */
+export const challengeNow = (s: Save, now: number): Purchase => {
+  if (s.lap === 0) return { refused: '지금 도전 중이에요. 반복 사냥 중에만 바로 도전할 수 있어요.' }
+  const kills = stageOf(s.kills) * KILLS_PER_STAGE
+  const next = { ...s, kills, best: Math.max(s.best, kills), lap: 0, dmg: 0, hurt: 0, ms: 0, moved: now }
+  const target = foeOf(next).exam ? EXAM_NAME : `스테이지 ${stageOf(kills)}`
+  return { save: next, note: `${target}에 다시 도전! ${STAGE_MS / 1000}초 안에 쓰러뜨려요.` }
+}
+
 /** `step` ms of the fight: the foe's blows land, and a challenge past STAGE_MS ends. */
 const endure = (s: Save, step: number, now: number): { save: Save; fail?: Fail } => {
   const ms = s.ms + step

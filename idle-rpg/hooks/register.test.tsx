@@ -407,8 +407,8 @@ test('/rpg reports, buys and saves each purchase', async ($, on) => {
   expect(await rpg($, '춤')).toContain('모르는 명령')
 })
 
-test('/rpg tells the hp, the clock, and where a retreat lap leads', async ($, on) => {
-  mock.clock(on, { now: NOON })
+test('/rpg tells the hp, the clock, and where a retreat lap leads, and 도전 skips the lap', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
   const world = engine(on, { save: stored({ kills: 205 }) })
   await start($)
   const challenging = await rpg($)
@@ -418,6 +418,10 @@ test('/rpg tells the hp, the clock, and where a retreat lap leads', async ($, on
   const lapping = await rpg($)
   expect(lapping).toContain('반복 사냥 6/10')
   expect(lapping).toContain('스테이지 21에 다시 도전')
+  await clock.advance(10)
+  expect(await rpg($, '도전')).toContain('스테이지 21에 다시 도전!')
+  expect(saved(world)).toMatchObject({ kills: 200, lap: 0 })
+  expect(await rpg($, '도전')).toContain('반복 사냥 중에만')
 })
 
 test('a retreat holds across turn ends against a row an ended session left further on', async ($, on) => {

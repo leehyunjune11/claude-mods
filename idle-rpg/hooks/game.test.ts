@@ -15,6 +15,7 @@ import {
   enhanceCost,
   autoEnhance,
   challenge,
+  challengeNow,
   foeOf,
   fresh,
   gacha,
@@ -566,4 +567,16 @@ test('합성 levels join by the higher per slot, and a bad one drops alone', () 
   expect(parseSave({ ...a, forge: { weapon: -1, armor: 0, ring: 0 } })).toEqual(fresh())
   expect(parseSave({ ...a, kills: 4, forge: 'lots' })).toEqual({ ...fresh(), kills: 4, best: 4 })
   expect(parseSave(a).forge).toEqual(a.forge)
+})
+
+test('보스 도전 skips the rest of a lap to where its end would leave the hero, the examiner too', () => {
+  expect(challengeNow(having({ kills: 0 }), 1)).toEqual({ refused: expect.stringContaining('반복 사냥 중에만') })
+  const lapping = having({ kills: 195, lap: 5, best: 205, hurt: 40, ms: 9000, dmg: 3 })
+  const now = bought(challengeNow(lapping, 7))
+  expect(now).toMatchObject({ kills: 200, lap: 0, hurt: 0, ms: 0, dmg: 0, best: 205, moved: 7 })
+  // A pending trial: the examiner steps in, from stage 1's lap too.
+  const trial = { line: 'melee' as const, hp: 1e9 }
+  const exam = bought(challengeNow(having({ kills: 0, lap: 10, job: { line: null, tier: 0, trial, at: 1 } }), 2))
+  expect(exam.kills).toBe(10)
+  expect(foeOf(exam).exam).toBe(true)
 })
