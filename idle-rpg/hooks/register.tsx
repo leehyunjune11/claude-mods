@@ -8,6 +8,10 @@ import {
   EXAM_NAME,
   EXP_PER_USD,
   GACHA_COST,
+  PET_COST,
+  PET_NAMES,
+  petGacha,
+  petPower,
   GEAR_MULT,
   JOBS,
   JOB_LINES,
@@ -81,8 +85,10 @@ import {
   MOB_STEPS,
   MOBS,
   PALETTE,
+  PETS,
   SCENE,
   SCHEMES,
+  scale2,
   TINTS,
   ZONE_SCENES,
 } from './sprites'
@@ -139,7 +145,7 @@ const palOf = (scheme: Scheme, look: string) => {
 }
 
 /** The monster on screen, and the hero's look (LOOKS; the 인턴's when absent). */
-export type View = { kills: number; boss: boolean; left: number; exam?: boolean; look?: string }
+export type View = { kills: number; boss: boolean; left: number; exam?: boolean; look?: string; pet?: number }
 
 export type Scene = {
   t: number
@@ -210,15 +216,21 @@ const viewOf = (s: Scene, x: Save): View => {
     exam: s.cur ? s.cur.exam === true : foe.exam,
     left: unplayed.length > 0 ? 0 : Math.max(0, 1 - x.dmg / foe.hp),
     look: line ? `${line}${tier}` : 'intern',
+    ...(x.pet && { pet: x.pet.rarity }),
   }
 }
 
 /** One color per pixel, row-major, `cols` by the size's height. */
 export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 'dark', size: Size = 'small') => {
-  const { rows, heroX: HERO_X, mobX: MOB_X } = SIZES[size]
+  const { rows, heroX, mobX: baseX } = SIZES[size]
   const H = rows * 2
   const GROUND = H - 1
   const big = size === 'big'
+  // A pet stands at the hero's back: the hero and the monster step right to make room.
+  const petArt = view.pet ? (big ? scale2(PETS[view.pet] ?? []) : (PETS[view.pet] ?? [])) : []
+  const room = petArt.length > 0 ? (petArt[0]?.length ?? 0) + 1 : 0
+  const HERO_X = heroX + room
+  const MOB_X = baseX + room
   const COLOR = (ZONE_COLORS[zoneOf(view.kills)] ?? ZONE_COLORS[0])![scheme]
   const PAL = palOf(scheme, view.look ?? 'intern')
   const looks = big ? BIG_LOOKS : LOOKS
@@ -282,6 +294,8 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
   const beat = (s.t >> 3) & 1
   const hero = s.swing > IMPACT ? art?.swing[0] : s.cur ? art?.swing[1] : art?.idle[beat]
   if (hero) sprite(hero, HERO_X, GROUND - hero.length, { bare: 'C' })
+  // The pet hops as the hero swings.
+  if (petArt.length > 0) sprite(petArt, heroX, GROUND - petArt.length - (s.swing > 0 ? 1 : 0))
 
   // A monster shifts to its second frame on the off beat while it waits, and hops as it walks in.
   const kind = view.boss ? MOBS.length : mobIndex(view.kills)
@@ -488,6 +502,10 @@ const priceOf = (x: Save, stat: Stat) => (x[stat] >= statMax(stat) ? '최대' : 
 /** /rpg's word for each stat. */
 const STAT_VERBS: Record<string, Stat> = { 강화: 'enhance', 체력: 'vit', 치명: 'critRate', 치피: 'critDmg', 속도: 'haste' }
 
+/** The pet and what it adds, or none. */
+const petText = (x: Save) =>
+  x.pet ? `${RARITY_NAMES[x.pet.rarity]} ${PET_NAMES[x.pet.rarity]} Lv.${x.pet.level} (자동 공격마다 공격력 +${Math.round(petPower(x) * 100)}%)` : '없음'
+
 export const report = (x: Save) => {
   const { level, into, need } = levelInfo(x.exp)
   const gear = SLOTS.map(slot => {
@@ -501,6 +519,7 @@ export const report = (x: Save) => {
     `골드 ${amount(x.gold)} · 공격력 ${amount(attack(x))} · 강화 +${x.enhance} · ${hpText(x)} · 체력 강화 +${x.vit}`,
     `능력치: ${statLine(x)}`,
     `장비: ${gear.join(' · ')}`,
+    `펫: ${petText(x)}`,
     ...(missionLine(x) ? [`오늘의 미션: ${missionLine(x)}`] : []),
     `스킬 (남은 포인트 ${skillPoints(x)}): ${SKILLS.map(id => `${SKILL_NAMES[id]} ${x.skills[id]}/${MAX_SKILL}`).join(' · ')}`,
     `다음 강화: ${amount(enhanceCost(x))}골드 · 체력 강화: ${amount(enhanceCost(x, 'vit'))}골드 · ${EXTRA_STATS.map(stat => `${STAT_NAMES[stat]}: ${priceOf(x, stat)}`).join(' · ')} · 뽑기: ${GACHA_COST}골드`,
@@ -514,6 +533,7 @@ export const report = (x: Save) => {
     '  /rpg 치피 [최대]: 치명타 피해 +0.1배',
     `  /rpg 속도 [최대]: 공격 속도 +2% (최대 +${statMax('haste')})`,
     '  /rpg 도전: 반복 사냥 중에 남은 바퀴를 건너뛰고 바로 다시 도전',
+    `  /rpg 펫: 펫 뽑기 ${PET_COST}골드 (같거나 낮은 등급이 나오면 지금 펫 레벨 +1)`,
     '  /rpg 뽑기: 무작위 장비 (일반 60% · 희귀 28% · 영웅 10% · 전설 2%)',
     ...SKILLS.map(id => `  /rpg 스킬 ${SKILL_NAMES[id]}: ${SKILL_HELP[id]}`),
     '  /rpg 전직 [근접|마법|원거리|암살]: Lv.10·30·60부터 전직 시험 신청 (인턴은 계열을 골라요)',
@@ -906,6 +926,14 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
       return `${note} ${goldLeft(x)}`
     })
   }
+  if (verb === '펫') {
+    const before = (await read($, save)).pet?.rarity ?? 0
+    return settle(await buy($, x => petGacha(x, Math.random)), (x, note) => {
+      const rarity = x.pet?.rarity ?? 0
+      if (rarity >= 3 && rarity > before) $.ui.toast(`${RARITY_NAMES[rarity]} 펫 ${PET_NAMES[rarity]} 획득!`)
+      return `${note} ${goldLeft(x)}`
+    })
+  }
   if (verb === '스킬') {
     const id = SKILL_IDS[arg]
     if (!id) return `스킬 이름을 적어 주세요: ${SKILLS.map(s => SKILL_NAMES[s]).join(', ')}`
@@ -1064,8 +1092,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'rpg',
-      description: '방치형 RPG: 상태·메뉴 보기, 강화, 체력 강화, 치명타·공격 속도, 보스 도전, 뽑기, 스킬, 전직',
-      argumentHint: '[강화 [최대] | 체력 [최대] | 치명·치피·속도 [최대] | 도전 | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
+      description: '방치형 RPG: 상태·메뉴 보기, 강화, 체력 강화, 치명타·공격 속도, 보스 도전, 뽑기, 펫, 스킬, 전직',
+      argumentHint: '[강화 [최대] | 체력 [최대] | 치명·치피·속도 [최대] | 도전 | 뽑기 | 펫 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
     })
     const kept = await $.store.get('theme')
     theme = THEMES.find(t => t === kept) ?? 'system'
@@ -1159,7 +1187,9 @@ export const register: Register = on => {
           </Box>
         )}
         {missionLine(x) !== '' && <Text>오늘의 미션: {missionLine(x)}</Text>}
-        <Text>장비: {SLOTS.map(slot => `${SLOT_NAMES[slot]} ${RARITY_NAMES[x.gear[slot]]}${stars(x, slot)}`).join(' · ')}</Text>
+        <Text>
+          장비: {SLOTS.map(slot => `${SLOT_NAMES[slot]} ${RARITY_NAMES[x.gear[slot]]}${stars(x, slot)}`).join(' · ')} · 펫: {petText(x)}
+        </Text>
         <Box columnGap={2} flexWrap="wrap">
           {key('e', `강화 (${amount(enhanceCost(x))}골드)`, '강화')}
           {key('m', '강화 최대', '강화 최대')}
@@ -1167,6 +1197,7 @@ export const register: Register = on => {
           {key('v', '체력 최대', '체력 최대')}
           {key('u', `자동 강화: ${auto ? '켜짐' : '꺼짐'}`, '자동')}
           {key('g', `뽑기 (${GACHA_COST})`, '뽑기')}
+          {key('k', `펫 뽑기 (${PET_COST})`, '펫')}
         </Box>
         <Box columnGap={2} flexWrap="wrap">
           {key('i', `치명타 확률 +${x.critRate} (${priceOf(x, 'critRate')})`, '치명')}

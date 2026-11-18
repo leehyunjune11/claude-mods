@@ -65,6 +65,11 @@ export type IdleRpgSave = {
    * per slot. Absent on saves from before it, and read as 0.
    */
   forge?: Record<IdleRpgSlot, number>
+  /**
+   * The 펫 at the hero's side: its rarity (1 일반 to 4 전설) and level, a 펫 뽑기 no better adding
+   * one. Absolute like the gear: rows join it by the higher rarity, then level. Absent: none.
+   */
+  pet?: { rarity: 1 | 2 | 3 | 4; level: number }
 }
 
 export type IdleRpgMeta = {

@@ -1092,3 +1092,18 @@ test('자동 typed in another session reaches an open one within the half minute
   await endTurn($)
   expect(saved(world).enhance).toBeGreaterThan(30)
 })
+
+test('a pet stands at the hero\'s back, in both sizes, and the hero and the monster step right for it', () => {
+  const duck = hexOf(PALETTE.Y!)
+  for (const size of ['small', 'big'] as const) {
+    const rows = size === 'big' ? 18 : 10
+    const plain = paintScene(newScene(), { kills: 0, boss: false, left: 1 }, 72, 'dark', size)
+    const withPet = paintScene(newScene(), { kills: 0, boss: false, left: 1, pet: 1 }, 72, 'dark', size)
+    const column = (p: Uint32Array, x: number) => Array.from({ length: rows }, (_, y) => p[y * 72 + x])
+    // The duck's yellow, near the left edge, only with the pet.
+    const yellow = (p: Uint32Array) => Array.from({ length: 6 }, (_, x) => column(p, x).includes(duck)).some(Boolean)
+    expect(yellow(withPet)).toBe(true)
+    expect(yellow(plain)).toBe(false)
+    expect(withPet).not.toEqual(plain)
+  }
+})

@@ -10,6 +10,10 @@ import {
   attack,
   autoAttack,
   autoMs,
+  petGacha,
+  petPower,
+  PET_COST,
+  MAX_PET_LEVEL,
   critChance,
   changeLine,
   costExp,
@@ -37,7 +41,7 @@ import {
   stageOf,
   total,
 } from './game'
-import { BOSS, BOSS_STEP, DAY_PALETTE, EXAMINER, FONT, HERO_IDLE, HERO_SWING, LOOKS, MOB_STEPS, MOBS, PALETTE, TINTS } from './sprites'
+import { PETS, BOSS, BOSS_STEP, DAY_PALETTE, EXAMINER, FONT, HERO_IDLE, HERO_SWING, LOOKS, MOB_STEPS, MOBS, PALETTE, TINTS } from './sprites'
 
 const never = () => 0.99
 const rolls = (...values: number[]) => {
@@ -303,7 +307,7 @@ test('parseSave takes a stored save and nothing else', () => {
 })
 
 test('every sprite is a grid of palette colors that fits the scene', () => {
-  const sprites = [...HERO_IDLE, ...HERO_SWING, ...MOBS, BOSS, ...MOB_STEPS, BOSS_STEP]
+  const sprites = [...HERO_IDLE, ...HERO_SWING, ...MOBS, BOSS, ...MOB_STEPS, BOSS_STEP, ...PETS.slice(1)]
   for (const rows of sprites) {
     expect(rows.length).toBeLessThanOrEqual(9)
     expect(new Set(rows.map(row => row.length)).size).toBe(1)
@@ -606,4 +610,26 @@ test('치명타 확률, 치명타 피해 and 공격 속도: each its own price, 
   const { critRate, critDmg, haste, ...old } = a
   expect(parseSave(old)).toMatchObject({ critRate: 0, critDmg: 0, haste: 0 })
   expect(dayStart(a).enhance).toBe(64)
+})
+
+test('펫 뽑기: a rarer pet comes, one no better levels the kept one, and the pet adds to each auto attack', () => {
+  expect(petGacha(having({ gold: 999 }), never)).toEqual({ refused: expect.stringContaining('1000골드') })
+  const duck = bought(petGacha(having({ gold: PET_COST * 3 }), rolls(0.1)))
+  expect(duck).toMatchObject({ gold: PET_COST * 2, pet: { rarity: 1, level: 0 } })
+  expect(petPower(duck)).toBe(0.1)
+  const owl = bought(petGacha(duck, rolls(0.99)))
+  expect(owl.pet).toEqual({ rarity: 4, level: 0 })
+  const leveled = bought(petGacha(owl, rolls(0.1)))
+  expect(leveled.pet).toEqual({ rarity: 4, level: 1 })
+  expect(Math.round(petPower(leveled) * 100)).toBe(63)
+  const full = { ...leveled, gold: PET_COST, pet: { rarity: 4 as const, level: MAX_PET_LEVEL } }
+  expect(bought(petGacha(full, rolls(0.1)))).toMatchObject({ gold: 300, pet: { level: MAX_PET_LEVEL } })
+  // The pet's share lands with the swing.
+  const hit = apply(having({ kills: 9, pet: { rarity: 4, level: 0 } }), { type: 'tick', ms: 1500 }, never).hits[0]
+  expect(hit?.dmg).toBe(16)
+  // Rows keep the rarer pet, then the higher level; a bad one reads as none.
+  expect(join(having({ pet: { rarity: 2, level: 9 } }), having({ pet: { rarity: 3, level: 0 } })).pet).toEqual({ rarity: 3, level: 0 })
+  expect(join(having({ pet: { rarity: 3, level: 4 } }), having({})).pet).toEqual({ rarity: 3, level: 4 })
+  expect(parseSave(having({ pet: { rarity: 5 as never, level: 0 } })).pet).toBeUndefined()
+  expect(parseSave(having({ pet: { rarity: 2, level: 3 } })).pet).toEqual({ rarity: 2, level: 3 })
 })

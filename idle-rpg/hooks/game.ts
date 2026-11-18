@@ -52,6 +52,13 @@ const HERO_HP = 100
 const HP_PER_LEVEL = 10
 /** Each 체력 강화 multiplies max hp; its price climbs as 강화's does, on its own count. */
 const VIT_HP = 1.1
+/** 펫 뽑기's price; a pet no better than the one kept levels it, up to MAX_PET_LEVEL, then refunds. */
+export const PET_COST = 1000
+const PET_REFUND = 300
+export const MAX_PET_LEVEL = 30
+/** By rarity: what share of attack the pet adds to each auto attack; each level adds PET_STEP of it. */
+const PET_POWER = [0, 0.1, 0.2, 0.35, 0.6] as const
+const PET_STEP = 0.05
 /** A 계열 변경 costs what the next this many 강화 would. */
 const LINE_CHANGE_ENHANCES = 20
 
@@ -82,6 +89,8 @@ export const ZONES = [
   { name: '클라우드 고원', mobs: [6, 7, 1] },
   { name: '커널 화산', mobs: [8, 9, 2] },
 ] as const
+/** By rarity, the pet that comes. */
+export const PET_NAMES = ['', '고무오리', '캐시 고양이', '핑 다람쥐', '양자 부엉이'] as const
 export const BOSS_NAME = '레거시 골렘'
 export const EXAM_NAME = '전직 시험관'
 export const INTERN = '인턴'
@@ -187,6 +196,8 @@ export const mobIndex = (kills: number) => {
 
 export const forgeOf = (save: Save, slot: Slot) => save.forge?.[slot] ?? 0
 export const gearMult = (save: Save, slot: Slot) => (GEAR_MULT[slot][save.gear[slot]] ?? 1) * (1 + FORGE_STEP * forgeOf(save, slot))
+/** What share of attack the pet adds to an auto attack; 0 with none. */
+export const petPower = (save: Save) => (save.pet ? PET_POWER[save.pet.rarity] * (1 + PET_STEP * save.pet.level) : 0)
 export const attack = (save: Save) =>
   Math.round((8 + 2 * levelOf(save.exp)) * ENHANCE_ATTACK ** save.enhance * gearMult(save, 'weapon') * TIER_ATTACK[jobOf(save).tier])
 
@@ -226,7 +237,7 @@ export const challengeStage = (save: Save) => stageOf(save.kills) + (save.lap > 
  */
 export const challenge = (save: Save) => {
   // What a swing deals on average, crits counted.
-  const a = attack(save) * (1 + critChance(save) * (critMult(save) - 1))
+  const a = attack(save) * (1 + critChance(save) * (critMult(save) - 1)) * (1 + petPower(save))
   const pace = autoMs(save)
   const fight = (hp: number, atk: number) => {
     const ms = Math.ceil(hp / a) * pace
@@ -405,7 +416,8 @@ export const autoAttack = (save: Save, ms: number, rng: Rng, now = 0) => {
     }
     const { line, tier } = jobOf(s)
     const skill = line !== null && rng() < ACTIVE_CHANCE ? line : undefined
-    const struck = strike(s, skill ? ACTIVE_POWER[tier] : 1, rng, now)
+    // The pet strikes beside the hero: its share lands with the swing.
+    const struck = strike(s, (skill ? ACTIVE_POWER[tier] : 1) + petPower(s), rng, now)
     s = struck.save
     hits.push(skill ? { ...struck.hit, skill } : struck.hit)
   }
@@ -504,6 +516,25 @@ export const gacha = (save: Save, rng: Rng): Purchase => {
   }
 }
 
+/** 펫 뽑기: a pet of a rolled rarity; better than the one kept, it comes; else the kept one levels. */
+export const petGacha = (save: Save, rng: Rng): Purchase => {
+  if (save.gold < PET_COST) return { refused: `골드가 부족해요. 펫 뽑기에는 ${PET_COST}골드가 필요해요 (보유 ${Math.floor(save.gold)}).` }
+  const roll = rng()
+  const rarity = (1 + RARITY_EDGES.filter(edge => roll >= edge).length) as 1 | 2 | 3 | 4
+  const drawn = `펫 뽑기 결과: ${RARITY_NAMES[rarity]} ${PET_NAMES[rarity]}.`
+  const kept = save.pet
+  const gold = save.gold - PET_COST
+  if (!kept || rarity > kept.rarity) {
+    const next = { ...save, gold, pet: { rarity, level: 0 } }
+    return { save: next, note: `${drawn} 함께 싸워요! 자동 공격마다 공격력 +${Math.round(petPower(next) * 100)}%` }
+  }
+  if (kept.level >= MAX_PET_LEVEL) {
+    return { save: { ...save, gold: gold + PET_REFUND }, note: `${drawn} ${PET_NAMES[kept.rarity]}이(가) 이미 최대 레벨이라 ${PET_REFUND}골드를 돌려받았어요.` }
+  }
+  const next = { ...save, gold, pet: { ...kept, level: kept.level + 1 } }
+  return { save: next, note: `${drawn} ${PET_NAMES[kept.rarity]} Lv.${kept.level + 1}! 자동 공격마다 공격력 +${Math.round(petPower(next) * 100)}%` }
+}
+
 const lineByName = (name: string) =>
   JOB_LINES.find(line => line === name || JOBS[line].label === name || JOBS[line].names.includes(name))
 const lineList = () => JOB_LINES.map(line => JOBS[line].label).join(', ')
@@ -565,6 +596,12 @@ const joinJob = (a?: Job, b?: Job) => {
   return b.tier > a.tier || (b.tier === a.tier && b.at > a.at) ? b : a
 }
 
+/** The pet two rows hold: the rarer, then the higher level. */
+const joinPet = (a?: Save['pet'], b?: Save['pet']) => {
+  if (!a || !b) return a ?? b
+  return b.rarity > a.rarity || (b.rarity === a.rarity && b.level > a.level) ? b : a
+}
+
 /**
  * Two shares as one: counters add, gear keeps the better piece, the job the higher, the furthest
  * reach the furthest. The position goes whole with the row that moved it last, so a retreat holds
@@ -574,6 +611,7 @@ export const join = (a: Save, b: Save): Save => {
   const later = b.moved !== a.moved ? b.moved > a.moved : b.kills !== a.kills ? b.kills > a.kills : b.dmg > a.dmg
   const at = later ? b : a
   const job = joinJob(a.job, b.job)
+  const pet = joinPet(a.pet, b.pet)
   return {
     v: 1,
     exp: a.exp + b.exp,
@@ -593,6 +631,7 @@ export const join = (a: Save, b: Save): Save => {
     lap: at.lap,
     moved: at.moved,
     ...(job && { job }),
+    ...(pet && { pet }),
     ...((a.forge || b.forge) && { forge: perSlot(slot => Math.max(forgeOf(a, slot), forgeOf(b, slot))) }),
   }
 }
@@ -657,7 +696,10 @@ export const parseSave = (raw: unknown): Save => {
   // A save from before exp was whole may hold a fraction.
   const job = parseJob(raw.job)
   // Fields from before the fight: absent, or bad, each reads as where a fresh fight stands.
-  const { vit, critRate, critDmg, haste, best, hurt, ms, lap, moved, forge } = raw
+  const { vit, critRate, critDmg, haste, best, hurt, ms, lap, moved, forge, pet } = raw
+  const kept = isRecord(pet) && isWhole(pet.rarity, 4) && pet.rarity > 0 && isWhole(pet.level, MAX_PET_LEVEL)
+    ? { rarity: pet.rarity as 1 | 2 | 3 | 4, level: pet.level }
+    : undefined
   const forged = isRecord(forge) && SLOTS.every(slot => isWhole(forge[slot], MAX_FORGE)) ? perSlot(slot => forge[slot] as number) : undefined
   return {
     v: 1,
@@ -679,5 +721,6 @@ export const parseSave = (raw: unknown): Save => {
     moved: isCount(moved) ? moved : 0,
     ...(job && { job }),
     ...(forged && { forge: forged }),
+    ...(kept && { pet: kept }),
   }
 }

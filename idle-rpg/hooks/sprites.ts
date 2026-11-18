@@ -658,6 +658,19 @@ export const TINTS: Record<string, string>[][] = [
   [{}, { N: '#9a7650', n: '#5a4030' }, { N: '#6a86a6', n: '#3a4a60' }, { N: '#7f9060', n: '#4a5233' }],
 ]
 
+/** The pets, by rarity (game.ts's PET_NAMES), at the hero's back and facing right. */
+export const PETS = [
+  [], // none
+  // 고무오리
+  ['...Y.', '..YKO', 'YYYY.', '.YY..'],
+  // 캐시 고양이
+  ['S.S..', 'SKSK.', 'SSSS.', 'S..S.'],
+  // 핑 다람쥐
+  ['o..D.', 'oo.DK', '.oDDD', '..D.D'],
+  // 양자 부엉이
+  ['P...P', 'PYPYP', 'PPPPP', '.p.p.'],
+]
+
 /** Damage numbers: the digits, and K for thousands. */
 export const FONT: Record<string, string[]> = {
   '0': ['###', '#.#', '#.#', '#.#', '###'],
