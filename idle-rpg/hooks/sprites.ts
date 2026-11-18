@@ -63,6 +63,7 @@ export const SCENE = {
   flash: '#ffffff',
   damage: '#f4f4f4',
   crit: '#ffd24a',
+  alarm: '#4a1a26', // the sky as a boss walks in
 }
 
 /**
@@ -81,6 +82,7 @@ export const DAY_SCENE: typeof SCENE = {
   flash: '#1d2333',
   damage: '#1d2333',
   crit: '#b43c0a',
+  alarm: '#f2b8ae',
 }
 /** What the day draws in place of PALETTE's light colors. */
 export const DAY_PALETTE: Record<string, string> = {
@@ -685,6 +687,10 @@ export const FONT: Record<string, string[]> = {
   '9': ['###', '#.#', '###', '..#', '###'],
   K: ['#.#', '#.#', '##.', '#.#', '#.#'],
   E: ['###', '#..', '##.', '#..', '###'],
+  B: ['##.', '#.#', '##.', '#.#', '##.'],
+  O: ['###', '#.#', '#.#', '#.#', '###'],
+  S: ['###', '#..', '###', '..#', '###'],
+  '!': ['.#.', '.#.', '.#.', '...', '.#.'],
 }
 
 // --- The big scene: 18 pixels tall, the ground on the last. The hero is drawn at about twice the

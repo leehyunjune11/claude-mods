@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 
 import type { IdleRpgSave as Save } from '../types'
 import { apply, autoAttack, fresh, join, levelOf, mobIndex, parseSave, questReward, stageOf, zoneOf } from './game'
-import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene, trialTag, awayNote, news } from './register'
+import { amount, bandLayout, fall, isMoving, newScene, paintScene, rowsOf, stepScene, trialTag, awayNote, news } from './register'
 import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, PALETTE, SCENE, ZONE_SCENES } from './sprites'
 
 const BAND = {
@@ -1123,4 +1123,47 @@ test('/rpg 던전 runs each kind twice a day, pays without moving the hero, and 
   expect(await rpg($, '던전 경험치')).toContain('경험치 +')
   await clock.advance(24 * 3_600_000)
   expect(await rpg($, '던전')).toContain('골드 던전 2/2')
+})
+
+test('a boss walking in reddens the sky and says BOSS!; a plain monster does not', () => {
+  const alarm = hexOf(SCENE.alarm)
+  const crit = hexOf(SCENE.crit)
+  const walking = (view: { kills: number; boss: boolean; left: number; exam?: boolean }) => {
+    const scene = newScene()
+    scene.enter = 4
+    return [...paintScene(scene, view, 72)]
+  }
+  const boss = walking({ kills: 9, boss: true, left: 1 })
+  // Column 1 has no star.
+  expect(boss[1]).toBe(alarm)
+  // The word, in the crit color, along the top rows at the middle.
+  expect(boss.slice(0, 5 * 72).filter(c => c === crit).length).toBeGreaterThan(20)
+  expect(walking({ kills: 9, boss: false, left: 1, exam: true })[1]).toBe(alarm)
+  expect(walking({ kills: 8, boss: false, left: 1 })[1]).not.toBe(alarm)
+  // Once it stands, the sky is the sky again.
+  expect(paintScene(newScene(), { kills: 9, boss: true, left: 1 }, 72)[1]).not.toBe(alarm)
+})
+
+test('a fall drops the hits in flight and lays the hero flat a moment before the next swing', () => {
+  const scene = newScene()
+  scene.queue.push({ dmg: 1, crit: false, killed: false, boss: false, advanced: false })
+  stepScene(scene)
+  expect(scene.cur).toBeDefined()
+  fall(scene)
+  expect(scene.cur).toBeUndefined()
+  expect(isMoving(scene)).toBe(true)
+  // The hero's top row, standing and fallen: fallen, it is lower.
+  const top = (sc: typeof scene) => {
+    const p = paintScene(sc, { kills: 0, boss: false, left: 1 }, 72)
+    const sky = [hexOf(SCENE.sky), hexOf(SCENE.star)]
+    for (let y = 0; y < 8; y++) for (let x = 1; x < 11; x++) if (!sky.includes(p[y * 72 + x]!)) return y
+    return 10
+  }
+  expect(top(scene)).toBeGreaterThan(top(newScene()))
+  scene.queue.push({ dmg: 1, crit: false, killed: false, boss: false, advanced: false })
+  for (let i = 0; i < 11; i++) stepScene(scene)
+  expect(scene.cur).toBeUndefined()
+  stepScene(scene)
+  stepScene(scene)
+  expect(scene.cur).toBeDefined()
 })

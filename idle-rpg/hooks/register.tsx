@@ -129,6 +129,7 @@ const ENTER = 8 // frames a monster takes to walk in
 const FLOAT = 10
 const FX = 8 // frames a skill's effect plays, from the hit landing
 const QUEUE = 4
+const DOWN = 12 // frames the hero lies fallen after a failed fight: a second at the fast pace
 
 const rgb = (hex: string) => Number.parseInt(hex.slice(1), 16)
 const colors = <T extends Record<string, string>>(hexes: T) =>
@@ -165,10 +166,21 @@ export type Scene = {
   fx: number
   /** Frames walked so far, each monster's walk-in being ENTER of them: it slides the hills. */
   walked: number
+  /** Frames left of the hero lying fallen; no hit plays till it is up. */
+  down: number
   floats: { text: string; crit: boolean; y: number; life: number }[]
 }
 
-export const newScene = (): Scene => ({ t: 0, queue: [], swing: 0, flash: 0, enter: 0, fx: 0, walked: 0, floats: [] })
+export const newScene = (): Scene => ({ t: 0, queue: [], swing: 0, flash: 0, enter: 0, fx: 0, walked: 0, down: 0, floats: [] })
+
+/** A failed fight: the hits in flight are dropped, and the hero lies a moment before the next. */
+export const fall = (s: Scene) => {
+  s.queue = []
+  s.cur = undefined
+  s.swing = 0
+  s.fx = 0
+  s.down = DOWN
+}
 
 const damageText = (dmg: number) =>
   dmg < 10_000 ? String(dmg) : dmg < 1e7 ? `${Math.floor(dmg / 1000)}K` : dmg.toExponential(0).replace('e+', 'E')
@@ -182,6 +194,7 @@ export const stepScene = (s: Scene, dt = 1) => {
   }
   if (s.flash > 0) s.flash--
   if (s.fx > 0) s.fx--
+  if (s.down > 0) s.down--
   if (s.swing > 0) {
     s.swing--
     if (s.swing === IMPACT && s.cur) {
@@ -194,7 +207,7 @@ export const stepScene = (s: Scene, dt = 1) => {
     if (s.cur.killed) s.enter = ENTER
     s.cur = undefined
   }
-  if (!s.cur && s.enter === 0 && s.queue.length > 0) {
+  if (!s.cur && s.enter === 0 && s.down === 0 && s.queue.length > 0) {
     s.cur = s.queue.shift()
     s.swing = SWING
   }
@@ -206,7 +219,7 @@ export const stepScene = (s: Scene, dt = 1) => {
 }
 
 /** Whether the next frame differs by more than the idle bob: pick the fast timer. */
-export const isMoving = (s: Scene) => s.queue.length > 0 || s.cur !== undefined || s.enter > 0 || s.floats.length > 0
+export const isMoving = (s: Scene) => s.queue.length > 0 || s.cur !== undefined || s.enter > 0 || s.down > 0 || s.floats.length > 0
 
 /** The monster on screen: the save's, less the kills the scene has yet to play. */
 const viewOf = (s: Scene, x: Save): View => {
@@ -240,7 +253,9 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
   const PAL = palOf(scheme, view.look ?? 'intern')
   const looks = big ? BIG_LOOKS : LOOKS
   const art = looks[view.look ?? 'intern'] ?? looks.intern
-  const p = new Uint32Array(cols * H).fill(COLOR.sky)
+  // A boss or the examiner walking in reddens the sky, and says so over it.
+  const alarm = s.enter > 0 && (view.boss || view.exam === true)
+  const p = new Uint32Array(cols * H).fill(alarm ? COLOR.alarm : COLOR.sky)
   const px = (x: number, y: number, c: number) => {
     const a = Math.round(x)
     const b = Math.round(y)
@@ -297,7 +312,9 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
   }
 
   const beat = (s.t >> 3) & 1
-  const hero = s.swing > IMPACT ? art?.swing[0] : s.cur ? art?.swing[1] : art?.idle[beat]
+  const stand = s.swing > IMPACT ? art?.swing[0] : s.cur ? art?.swing[1] : art?.idle[beat]
+  // Fallen, the hero is squashed to every other row, flat on the ground.
+  const hero = s.down > 0 ? art?.idle[0]?.filter((_, j) => j % 2 === 1) : stand
   if (hero) sprite(hero, HERO_X, GROUND - hero.length, { bare: 'C' })
   // The pet hops as the hero swings.
   if (petArt.length > 0) sprite(petArt, heroX, GROUND - petArt.length - (s.swing > 0 ? 1 : 0))
@@ -358,6 +375,11 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
         }
       }
     }
+  }
+
+  if (alarm) {
+    const x0 = Math.floor(cols / 2) - 10
+    ;[...'BOSS!'].forEach((c, i) => sprite(FONT[c] ?? [], x0 + i * 4, 0, { ink: COLOR.crit, ring: false }))
   }
 
   s.floats.forEach((f, n) => {
@@ -766,6 +788,7 @@ const play = async ($: EngineInterface, event: GameEvent, away?: { ms: number; l
   } else {
     const failed = fails.findLast(f => f !== 'lap')
     if (failed) $.ui.toast(failNote(failed, after))
+    if (fails.length > 0) fall(scene)
   }
   for (const text of news(before, after, hits)) $.ui.toast(text)
   return left
