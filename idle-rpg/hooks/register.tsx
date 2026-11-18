@@ -7,8 +7,8 @@ import {
   BOSS_NAME,
   EXAM_NAME,
   EXP_PER_USD,
-  GACHA_COST,
-  PET_COST,
+  gachaCost,
+  petCost,
   DUNGEON_MS,
   DUNGEON_NAMES,
   DUNGEON_RUNS,
@@ -560,7 +560,7 @@ export const report = (x: Save) => {
     `펫: ${petText(x)}`,
     ...(missionLine(x) ? [`오늘의 미션: ${missionLine(x)}`] : []),
     `스킬 (남은 포인트 ${skillPoints(x)}): ${SKILLS.map(id => `${SKILL_NAMES[id]} ${x.skills[id]}/${MAX_SKILL}`).join(' · ')}`,
-    `다음 강화: ${amount(enhanceCost(x))}골드 · 체력 강화: ${amount(enhanceCost(x, 'vit'))}골드 · ${EXTRA_STATS.map(stat => `${STAT_NAMES[stat]}: ${priceOf(x, stat)}`).join(' · ')} · 뽑기: ${GACHA_COST}골드`,
+    `다음 강화: ${amount(enhanceCost(x))}골드 · 체력 강화: ${amount(enhanceCost(x, 'vit'))}골드 · ${EXTRA_STATS.map(stat => `${STAT_NAMES[stat]}: ${priceOf(x, stat)}`).join(' · ')} · 뽑기: ${amount(gachaCost(x))}골드`,
     `스테이지마다 ${STAGE_MS / 1000}초 안에 10마리를 잡아야 해요. 시간이 지나거나 쓰러지면 이전 스테이지로 후퇴해 한 바퀴 돈 뒤 다시 도전해요.`,
     '',
     '명령',
@@ -572,7 +572,7 @@ export const report = (x: Save) => {
     `  /rpg 속도 [최대]: 공격 속도 +2% (최대 +${statMax('haste')})`,
     `  /rpg 던전 <골드|경험치>: 하루 ${DUNGEON_RUNS}번씩, 가장 멀리 간 스테이지 몬스터를 ${DUNGEON_MS / 1000}초 동안 사냥해 5배 보상`,
     '  /rpg 도전: 반복 사냥 중에 남은 바퀴를 건너뛰고 바로 다시 도전',
-    `  /rpg 펫: 펫 뽑기 ${PET_COST}골드 (같거나 낮은 등급이 나오면 지금 펫 레벨 +1)`,
+    `  /rpg 펫: 펫 뽑기 ${amount(petCost(x))}골드 (같거나 낮은 등급이 나오면 지금 펫 레벨 +1)`,
     '  /rpg 뽑기: 무작위 장비 (일반 60% · 희귀 28% · 영웅 10% · 전설 2%)',
     ...SKILLS.map(id => `  /rpg 스킬 ${SKILL_NAMES[id]}: ${SKILL_HELP[id]}`),
     '  /rpg 전직 [근접|마법|원거리|암살]: Lv.10·30·60부터 전직 시험 신청 (인턴은 계열을 골라요)',
@@ -690,7 +690,7 @@ let auto = false
 /** The save with what 자동 강화 buys out of its gold, and the next 전직 applied for. */
 const grow = (x: Save, now: number) => {
   if (!auto) return x
-  const s = autoEnhance(x, GACHA_COST)
+  const s = autoEnhance(x, gachaCost(x))
   const job = jobOf(s)
   if (job.line === null || job.trial || !canApply(s)) return s
   const applied = applyJob(s, '', now)
@@ -706,7 +706,7 @@ const setAuto = async ($: EngineInterface, name: string) => {
   if (next) await buy($, x => ({ save: grow(x, now), note: '' }))
   await sync($, false)
   $.ui.invalidate('ui.render')
-  return next ? `자동 강화: 켜짐 (골드가 쌓이는 대로 공격·체력을 강화하고 뽑기 ${GACHA_COST}골드는 남겨요)` : '자동 강화: 꺼짐'
+  return next ? `자동 강화: 켜짐 (골드가 쌓이는 대로 공격·체력을 강화하고 뽑기 한 번 값은 남겨요)` : '자동 강화: 꺼짐'
 }
 
 /** A failed challenge, said once as it happens; a fall mid-lap says nothing, the band shows the lap. */
@@ -1089,6 +1089,8 @@ const checkDaily = async ($: EngineInterface) => {
   const d = kept?.day === day ? kept : { day, from: dayStart(x), paid: [] }
   if (d !== kept) await $.store.set(DAILY, d)
   daily = d
+  runs = parseRuns(await $.store.get(DUNGEON), day)
+  if (kept && d !== kept) $.ui.toast(`새 하루가 시작됐어요. 던전이 열렸어요: ${runsLine()}`)
   const done = MISSIONS.filter(m => !d.paid.includes(m.id) && missionProgress(m.id, x, d.from) >= m.need)
   if (done.length === 0) return
   const all = d.paid.length + done.length === MISSIONS.length
@@ -1107,6 +1109,10 @@ const checkDaily = async ($: EngineInterface) => {
 
 const DUNGEON = 'dungeon'
 type Runs = { day: string; used: Record<Dungeon, number> }
+/** The day's runs as last read, for the pane. */
+let runs: Runs | undefined
+const runsLeft = (k: Dungeon) => DUNGEON_RUNS - (runs?.used[k] ?? 0)
+const runsLine = () => DUNGEONS.map(k => `${DUNGEON_NAMES[k]} ${runsLeft(k)}/${DUNGEON_RUNS}`).join(' · ')
 
 const parseRuns = (raw: unknown, day: string): Runs => {
   const kept = raw as Partial<Runs> | null
@@ -1117,13 +1123,12 @@ const parseRuns = (raw: unknown, day: string): Runs => {
 /** One run: counted before it pays, so a failed write pays nothing rather than twice. */
 const enterDungeon = async ($: EngineInterface, arg: string) => {
   const kind = DUNGEONS.find(k => DUNGEON_NAMES[k].startsWith(arg) && arg !== '')
-  const runs = parseRuns(await $.store.get(DUNGEON), dayOf(await $.clock.now()))
-  const left = (k: Dungeon) => DUNGEON_RUNS - runs.used[k]
-  const status = DUNGEONS.map(k => `${DUNGEON_NAMES[k]} ${left(k)}/${DUNGEON_RUNS}`).join(' · ')
-  if (!kind) return `던전을 골라 주세요: /rpg 던전 골드 · /rpg 던전 경험치 (오늘 남은 입장: ${status})`
-  if (left(kind) <= 0) return `오늘 ${DUNGEON_NAMES[kind]}은 다 들어갔어요. 내일 다시 열려요.`
+  runs = parseRuns(await $.store.get(DUNGEON), dayOf(await $.clock.now()))
+  if (!kind) return `던전을 골라 주세요: /rpg 던전 골드 · /rpg 던전 경험치 (오늘 남은 입장: ${runsLine()})`
+  if (runsLeft(kind) <= 0) return `오늘 ${DUNGEON_NAMES[kind]}은 다 들어갔어요. 내일 다시 열려요.`
   const used = { ...runs.used, [kind]: runs.used[kind] + 1 }
-  await $.store.set(DUNGEON, { ...runs, used })
+  runs = { ...runs, used }
+  await $.store.set(DUNGEON, runs)
   const run = dungeon(await read($, save), kind, Math.random)
   await play($, { type: 'reward', exp: run.exp, gold: run.gold })
   await sync($, false)
@@ -1275,12 +1280,12 @@ export const register: Register = on => {
           {key('h', `체력 강화 (${amount(enhanceCost(x, 'vit'))}골드)`, '체력')}
           {key('v', '체력 최대', '체력 최대')}
           {key('u', `자동 강화: ${auto ? '켜짐' : '꺼짐'}`, '자동')}
-          {key('g', `뽑기 (${GACHA_COST})`, '뽑기')}
-          {key('k', `펫 뽑기 (${PET_COST})`, '펫')}
+          {key('g', `뽑기 (${amount(gachaCost(x))})`, '뽑기')}
+          {key('k', `펫 뽑기 (${amount(petCost(x))})`, '펫')}
         </Box>
         <Box columnGap={2} flexWrap="wrap">
-          {key('d', '골드 던전', '던전 골드')}
-          {key('f', '경험치 던전', '던전 경험치')}
+          {key('d', `골드 던전 (${runsLeft('gold')}/${DUNGEON_RUNS})`, '던전 골드')}
+          {key('f', `경험치 던전 (${runsLeft('exp')}/${DUNGEON_RUNS})`, '던전 경험치')}
         </Box>
         <Box columnGap={2} flexWrap="wrap">
           {key('i', `치명타 확률 +${x.critRate} (${priceOf(x, 'critRate')})`, '치명')}

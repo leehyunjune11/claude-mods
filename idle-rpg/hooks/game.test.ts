@@ -12,6 +12,8 @@ import {
   autoMs,
   dungeon,
   petGacha,
+  gachaCost,
+  petCost,
   petPower,
   PET_COST,
   MAX_PET_LEVEL,
@@ -240,6 +242,20 @@ test('gacha draws the slot and rarity the dice say, and never downgrades', () =>
   const rarityAt = (roll: number) => bought(gacha(having({ gold: 300 }), rolls(0.5, roll))).gear.armor
   expect([0, 0.59, 0.6, 0.87, 0.88, 0.97, 0.98].map(rarityAt)).toEqual([1, 1, 2, 2, 3, 3, 4])
   expect(bought(gacha(having({ gold: 300 }), rolls(0.999, 0))).gear.ring).toBe(1)
+})
+
+test('뽑기 and 펫 뽑기 cost more as the furthest stage pays more, and refund their share of it', () => {
+  // Stage 21 pays 1.12^20 ≈ 9.6 times stage 1.
+  const deep = { best: 200, kills: 200 }
+  expect([gachaCost(fresh()), petCost(fresh())]).toEqual([300, 1000])
+  expect([gachaCost(having(deep)), petCost(having(deep))]).toEqual([2894, 9646])
+  // A retreat lap does not lower it: the price follows the furthest stage.
+  expect(gachaCost(having({ ...deep, kills: 150 }))).toBe(2894)
+  expect(gacha(having({ ...deep, gold: 2893 }), never)).toEqual({ refused: expect.stringContaining('2894골드') })
+  const legend = { weapon: 4, armor: 4, ring: 4 } as const
+  const capped = bought(gacha(having({ ...deep, gold: 2894, gear: legend, forge: { weapon: MAX_FORGE, armor: 0, ring: 0 } }), rolls(0, 0.1)))
+  expect(capped.gold).toBe(868)
+  expect(bought(petGacha(having({ ...deep, gold: 9646 }), rolls(0.1))).gold).toBe(0)
 })
 
 test('a skill costs a point, which a level gives, and stops at 5', () => {

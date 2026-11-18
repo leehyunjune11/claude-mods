@@ -1122,6 +1122,9 @@ test('/rpg 던전 runs each kind twice a day, pays without moving the hero, and 
   expect(await rpg($, '던전 골드')).toContain('다 들어갔어요')
   expect(await rpg($, '던전 경험치')).toContain('경험치 +')
   await clock.advance(24 * 3_600_000)
+  // The first check of a new day says the dungeons are open again.
+  await endTurn($)
+  expect(world.toasts.filter(t => t.startsWith('새 하루'))).toEqual(['새 하루가 시작됐어요. 던전이 열렸어요: 골드 던전 2/2 · 경험치 던전 2/2'])
   expect(await rpg($, '던전')).toContain('골드 던전 2/2')
 })
 

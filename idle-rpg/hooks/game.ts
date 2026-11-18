@@ -58,6 +58,13 @@ const PET_REFUND = 300
 export const MAX_PET_LEVEL = 30
 /** By rarity: what share of attack the pet adds to each auto attack; each level adds PET_STEP of it. */
 const PET_POWER = [0, 0.1, 0.2, 0.35, 0.6] as const
+/**
+ * 뽑기 and 펫 뽑기 cost their base times what a monster of the furthest stage pays, so a pull costs
+ * about as many kills deep in as at the start; a refund keeps its share of it.
+ */
+const priceAt = (save: Save, base: number) => Math.round(base * REWARD_GROWTH ** (stageOf(save.best) - 1))
+export const gachaCost = (save: Save) => priceAt(save, GACHA_COST)
+export const petCost = (save: Save) => priceAt(save, PET_COST)
 const PET_STEP = 0.05
 /** A 계열 변경 costs what the next this many 강화 would. */
 const LINE_CHANGE_ENHANCES = 20
@@ -488,9 +495,11 @@ export const autoEnhance = (save: Save, keep = 0) => {
 }
 
 export const gacha = (save: Save, rng: Rng): Purchase => {
-  if (save.gold < GACHA_COST) {
-    return { refused: `골드가 부족해요. 뽑기에는 ${GACHA_COST}골드가 필요해요 (보유 ${Math.floor(save.gold)}).` }
+  const cost = gachaCost(save)
+  if (save.gold < cost) {
+    return { refused: `골드가 부족해요. 뽑기에는 ${cost}골드가 필요해요 (보유 ${Math.floor(save.gold)}).` }
   }
+  const refund = priceAt(save, GACHA_REFUND)
   const slot = SLOTS[Math.min(SLOTS.length - 1, Math.floor(rng() * SLOTS.length))] ?? 'weapon'
   const roll = rng()
   const rarity = (1 + RARITY_EDGES.filter(edge => roll >= edge).length) as Rarity
@@ -498,7 +507,7 @@ export const gacha = (save: Save, rng: Rng): Purchase => {
   const level = forgeOf(save, slot)
   if (rarity <= save.gear[slot] && level < MAX_FORGE) {
     const forge = { ...perSlot(at => forgeOf(save, at)), [slot]: level + 1 }
-    const forged = { ...save, gold: save.gold - GACHA_COST, forge }
+    const forged = { ...save, gold: save.gold - cost, forge }
     return {
       save: forged,
       note: `${drawn} 지금 ${SLOT_NAMES[slot]}에 합성해 ★${level + 1}이 됐어요! ${SLOT_EFFECTS[slot]} x${Number(gearMult(forged, slot).toFixed(2))}`,
@@ -506,12 +515,12 @@ export const gacha = (save: Save, rng: Rng): Purchase => {
   }
   if (rarity <= save.gear[slot]) {
     return {
-      save: { ...save, gold: save.gold - GACHA_COST + GACHA_REFUND },
-      note: `${drawn} ${SLOT_NAMES[slot]} 합성이 최대(★${MAX_FORGE})라 ${GACHA_REFUND}골드를 돌려받았어요.`,
+      save: { ...save, gold: save.gold - cost + refund },
+      note: `${drawn} ${SLOT_NAMES[slot]} 합성이 최대(★${MAX_FORGE})라 ${refund}골드를 돌려받았어요.`,
     }
   }
   return {
-    save: { ...save, gold: save.gold - GACHA_COST, gear: { ...save.gear, [slot]: rarity } },
+    save: { ...save, gold: save.gold - cost, gear: { ...save.gear, [slot]: rarity } },
     note: `${drawn} 장착했어요! ${SLOT_EFFECTS[slot]} x${GEAR_MULT[slot][rarity]}`,
   }
 }
@@ -560,18 +569,20 @@ export const dungeon = (save: Save, kind: Dungeon, rng: Rng) => {
 
 /** 펫 뽑기: a pet of a rolled rarity; better than the one kept, it comes; else the kept one levels. */
 export const petGacha = (save: Save, rng: Rng): Purchase => {
-  if (save.gold < PET_COST) return { refused: `골드가 부족해요. 펫 뽑기에는 ${PET_COST}골드가 필요해요 (보유 ${Math.floor(save.gold)}).` }
+  const cost = petCost(save)
+  if (save.gold < cost) return { refused: `골드가 부족해요. 펫 뽑기에는 ${cost}골드가 필요해요 (보유 ${Math.floor(save.gold)}).` }
+  const refund = priceAt(save, PET_REFUND)
   const roll = rng()
   const rarity = (1 + RARITY_EDGES.filter(edge => roll >= edge).length) as 1 | 2 | 3 | 4
   const drawn = `펫 뽑기 결과: ${RARITY_NAMES[rarity]} ${PET_NAMES[rarity]}.`
   const kept = save.pet
-  const gold = save.gold - PET_COST
+  const gold = save.gold - cost
   if (!kept || rarity > kept.rarity) {
     const next = { ...save, gold, pet: { rarity, level: 0 } }
     return { save: next, note: `${drawn} 함께 싸워요! 자동 공격마다 공격력 +${Math.round(petPower(next) * 100)}%` }
   }
   if (kept.level >= MAX_PET_LEVEL) {
-    return { save: { ...save, gold: gold + PET_REFUND }, note: `${drawn} ${PET_NAMES[kept.rarity]}이(가) 이미 최대 레벨이라 ${PET_REFUND}골드를 돌려받았어요.` }
+    return { save: { ...save, gold: gold + refund }, note: `${drawn} ${PET_NAMES[kept.rarity]}이(가) 이미 최대 레벨이라 ${refund}골드를 돌려받았어요.` }
   }
   const next = { ...save, gold, pet: { ...kept, level: kept.level + 1 } }
   return { save: next, note: `${drawn} ${PET_NAMES[kept.rarity]} Lv.${kept.level + 1}! 자동 공격마다 공격력 +${Math.round(petPower(next) * 100)}%` }
