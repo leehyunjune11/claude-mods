@@ -1157,6 +1157,9 @@ export const register: Register = on => {
       description: '방치형 RPG: 상태·메뉴 보기, 강화, 체력 강화, 치명타·공격 속도, 보스 도전, 던전, 뽑기, 펫, 스킬, 전직',
       argumentHint: '[강화 [최대] | 체력 [최대] | 치명·치피·속도 [최대] | 도전 | 던전 <골드|경험치> | 뽑기 | 펫 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
     })
+    // A reload over atoms an older version wrote: fields it never knew read as a fresh save's.
+    await update($, save, x => ({ ...fresh(), ...x }))
+    await update($, base, x => ({ ...fresh(), ...x }))
     const kept = await $.store.get('theme')
     theme = THEMES.find(t => t === kept) ?? 'system'
     const keptSize = await $.store.get('size')

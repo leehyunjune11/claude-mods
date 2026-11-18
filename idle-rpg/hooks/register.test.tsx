@@ -1167,3 +1167,37 @@ test('a fall drops the hits in flight and lays the hero flat a moment before the
   stepScene(scene)
   expect(scene.cur).toBeDefined()
 })
+
+test('a reload over a save an older version held in the session fills the new fields, and the hunt goes on', async ($, on) => {
+  // What 0.5 held in the atoms: no hp, clock, lap, nor stats past 강화.
+  const old = { v: 1, exp: 0, gold: 0, kills: 95, enhance: 0, gear: { weapon: 0, armor: 0, ring: 0 }, skills: { flurry: 0, crit: 0, greed: 0 }, dmg: 0 }
+  // The session's atoms read as the old code left them, once, at the reload.
+  const stale = new Set<string>()
+  const written: string[] = []
+  on('state.get', async (_, e: any, next: any) => {
+    const got = await next(e)
+    if (stale.has(e.key) && got?.value?.value !== undefined) {
+      return { value: { ...got.value, value: { shape: 'save-1', value: old } } }
+    }
+    return got
+  })
+  // Till the new code writes them.
+  on('state.set', (_, e: any, next: any) => {
+    if (stale.has(e.key)) written.push(JSON.stringify(e.value))
+    stale.delete(e.key)
+    return next(e)
+  })
+  const clock = mock.clock(on, { now: NOON })
+  const world = engine(on, DONE_TODAY)
+  await start($)
+  stale.add('save')
+  stale.add('base')
+  await start($)
+  expect([...stale]).toEqual([])
+  // What the new code first wrote over them: every field whole, the hero where it stood.
+  expect(written.join()).not.toContain('null')
+  await clock.advance(1000)
+  await endTurn($)
+  expect(JSON.stringify(world.store['s:sess-a'])).not.toContain('null')
+  expect(saved(world)).toMatchObject({ kills: 95, best: 95 })
+})
