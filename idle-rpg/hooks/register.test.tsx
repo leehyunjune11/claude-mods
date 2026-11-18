@@ -568,7 +568,10 @@ test('the pane buys with its keys, as the commands do, and takes the hero throug
   await ui.redraw()
   expect(await ui.find({ type: 'Text', text: /강화 \+1 성공/ })).toBeDefined()
 
-  // 인턴: four lines to pick, each with its 1차 name.
+  // 인턴: four lines to pick, each with its 1차 name, on the 전직·스킬 tab.
+  expect(await ui.find({ key: '전직 암살' })).toBeUndefined()
+  await ui.press({ key: 'tab-전직·스킬' })
+  await ui.redraw()
   expect(await ui.find({ key: '전직 암살' })).toBeDefined()
   await ui.press({ key: '전직 암살' })
   expect(saved(world).job).toMatchObject({ tier: 0, trial: { line: 'rogue', hp: 600 } })
@@ -587,6 +590,39 @@ test('the pane buys with its keys, as the commands do, and takes the hero throug
   expect(await ui.find({ key: '계열 암살' })).toBeUndefined()
   await ui.press({ key: '계열 마법' })
   expect(saved(world).job).toMatchObject({ line: 'magic', tier: 1 })
+  await ui.unmount()
+})
+
+test('환생 asks first, then starts over for good, and a row from before it adds nothing; the pane does it with [z] then [y]', async ($, on) => {
+  mock.clock(on, { now: NOON })
+  const world = engine(on, { save: stored({ kills: 1000, best: 1000, gold: 5000, enhance: 30, gear: { weapon: 4, armor: 0, ring: 0 } }) })
+  await start($)
+  expect(await rpg($, '환생')).toContain('/rpg 환생 확인')
+  expect(saved(world).kills).toBe(1000)
+  const note = await rpg($, '환생 확인')
+  expect(note).toContain('1번째 환생! 포인트 +10')
+  expect(world.toasts).toContain(note)
+  expect(saved(world)).toMatchObject({ kills: 0, best: 0, gold: 0, enhance: 0, gear: { weapon: 4 }, rebirth: { count: 1, points: 10 } })
+  expect(world.store.daily.from).toEqual({ stage: 1, enhance: 0, level: 1 })
+  // Another session's row from before it, still rich, rescanned: its gold stays gone.
+  world.store['s:sess-b'] = stored({ kills: 990, best: 990, gold: 9000, enhance: 20, moved: NOON + 5 })
+  await rpg($)
+  expect(saved(world)).toMatchObject({ kills: 0, gold: 0, enhance: 0 })
+  expect(await rpg($, '환생')).toContain('스테이지 100')
+
+  // The pane: [n] steps to the tab, [z] asks, [y] does it.
+  world.store['s:sess-c'] = stored({ kills: 1500, best: 1500, moved: NOON + 9, rebirth: { count: 1, points: 10 } })
+  await rpg($)
+  const ui = await $.ui.mount(PANE)
+  for (let i = 0; i < 3; i++) {
+    await ui.press({ key: 'tab-next' })
+    await ui.redraw()
+  }
+  expect(await ui.find({ key: '환생 확인' })).toBeUndefined()
+  await ui.press({ key: '환생' })
+  await ui.redraw()
+  await ui.press({ key: '환생 확인' })
+  expect(saved(world).rebirth).toEqual({ count: 2, points: 25 })
   await ui.unmount()
 })
 

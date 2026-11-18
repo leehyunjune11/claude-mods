@@ -69,6 +69,11 @@ export type IdleRpgSave = {
    * The 펫 at the hero's side: its rarity (1 일반 to 4 전설) and level, a 펫 뽑기 no better adding
    * one. Absolute like the gear: rows join it by the higher rarity, then level. Absent: none.
    */
+  /**
+   * 환생 so far: how many, and the points they gave. Rows join it by the higher count, and a row
+   * from a lower count brings only what a 환생 keeps (gear, 합성, the pet). Absent = never.
+   */
+  rebirth?: { count: number; points: number }
   pet?: { rarity: 1 | 2 | 3 | 4; level: number }
 }
 

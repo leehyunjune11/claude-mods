@@ -206,7 +206,7 @@ export const gearMult = (save: Save, slot: Slot) => (GEAR_MULT[slot][save.gear[s
 /** What share of attack the pet adds to an auto attack; 0 with none. */
 export const petPower = (save: Save) => (save.pet ? PET_POWER[save.pet.rarity] * (1 + PET_STEP * save.pet.level) : 0)
 export const attack = (save: Save) =>
-  Math.round((8 + 2 * levelOf(save.exp)) * ENHANCE_ATTACK ** save.enhance * gearMult(save, 'weapon') * TIER_ATTACK[jobOf(save).tier])
+  Math.round((8 + 2 * levelOf(save.exp)) * ENHANCE_ATTACK ** save.enhance * gearMult(save, 'weapon') * TIER_ATTACK[jobOf(save).tier] * rebirthBonus(save))
 
 const hpAt = (stage: number) => MOB_HP * HP_GROWTH ** (stage - 1)
 const atkAt = (stage: number) => MOB_ATK * ATK_GROWTH ** (stage - 1)
@@ -266,7 +266,7 @@ export const skillPoints = (save: Save) =>
  */
 export const questReward = (save: Save, xp: number) => ({
   exp: Math.round(expNeed(levelOf(save.exp)) * 0.005 * xp * trait(save, 'exp')),
-  gold: Math.round(MOB_GOLD * stageReward(save) * (xp / 2) * trait(save, 'gold') * gearMult(save, 'armor')),
+  gold: Math.round(MOB_GOLD * stageReward(save) * (xp / 2) * trait(save, 'gold') * gearMult(save, 'armor') * rebirthBonus(save)),
 })
 
 // --- 오늘의 미션: three goals a day, each counted from where the save stood when the day began.
@@ -294,7 +294,7 @@ export const missionProgress = (id: MissionId, save: Save, from: DayStart) => {
 }
 
 /** What a mission pays, and what all three done pay on top. */
-export const missionReward = (save: Save) => Math.round(MOB_GOLD * stageReward(save) * MISSION_KILLS * trait(save, 'gold') * gearMult(save, 'armor'))
+export const missionReward = (save: Save) => Math.round(MOB_GOLD * stageReward(save) * MISSION_KILLS * trait(save, 'gold') * gearMult(save, 'armor') * rebirthBonus(save))
 export const missionBonus = (save: Save) => missionReward(save) * MISSION_BONUS
 
 const costAt = (enhance: number) => Math.round(50 * ENHANCE_COST ** enhance)
@@ -336,7 +336,7 @@ const strike = (s: Save, times: number, rng: Rng, now: number): { save: Save; hi
     ...s,
     dmg: 0,
     moved: now,
-    gold: s.gold + Math.round(MOB_GOLD * reward * gearMult(s, 'armor') * (1 + GREED_GOLD * s.skills.greed) * trait(s, 'gold')),
+    gold: s.gold + Math.round(MOB_GOLD * reward * gearMult(s, 'armor') * rebirthBonus(s) * (1 + GREED_GOLD * s.skills.greed) * trait(s, 'gold')),
     exp: s.exp + Math.round(MOB_EXP * reward * gearMult(s, 'ring') * trait(s, 'exp')),
   }
   // The examiner stands apart from the stage: felling it moves the job on, not the hero, and the
@@ -525,6 +525,37 @@ export const gacha = (save: Save, rng: Rng): Purchase => {
   }
 }
 
+// --- 환생: from REBIRTH_STAGE on, the hero starts over from stage 1 as an 인턴, keeping gear, 합성
+// and the pet, for points that each add REBIRTH_POWER to attack and to all gold for good.
+
+export const REBIRTH_STAGE = 100
+const REBIRTH_POWER = 0.1
+
+export const rebirthOf = (save: Save) => save.rebirth ?? { count: 0, points: 0 }
+/** What a 환생 now would give: a point for each ten stages of the furthest reach. */
+export const rebirthGain = (save: Save) => Math.floor(stageOf(save.best) / 10)
+export const rebirthBonus = (save: Save) => 1 + REBIRTH_POWER * rebirthOf(save).points
+
+/** What a 환생 keeps of a save: the rest starts fresh. Also all a row from before one still brings. */
+const carried = (save: Save): Save => ({
+  ...fresh(),
+  gear: save.gear,
+  ...(save.forge && { forge: save.forge }),
+  ...(save.pet && { pet: save.pet }),
+})
+
+export const rebirth = (save: Save, now: number): Purchase => {
+  if (stageOf(save.best) < REBIRTH_STAGE) {
+    return { refused: `환생은 스테이지 ${REBIRTH_STAGE}에 닿으면 할 수 있어요 (최고 스테이지 ${stageOf(save.best)}).` }
+  }
+  const was = rebirthOf(save)
+  const next = { ...carried(save), moved: now, rebirth: { count: was.count + 1, points: was.points + rebirthGain(save) } }
+  return {
+    save: next,
+    note: `${next.rebirth.count}번째 환생! 포인트 +${rebirthGain(save)} · 공격력과 골드가 영구히 x${Number(rebirthBonus(next).toFixed(1))}. 장비·합성·펫은 그대로예요.`,
+  }
+}
+
 // --- 던전: a day's few free runs, each a minute against the furthest stage's monsters, one after
 // another, till the time is up or the hero falls. The run pays one kind, DUNGEON_REWARD times over,
 // and never moves the hero.
@@ -562,7 +593,7 @@ export const dungeon = (save: Save, kind: Dungeon, rng: Rng) => {
     }
   }
   const reward = kills * REWARD_GROWTH ** (stage - 1) * DUNGEON_REWARD
-  const gold = kind === 'gold' ? Math.round(MOB_GOLD * reward * gearMult(save, 'armor') * (1 + GREED_GOLD * save.skills.greed) * trait(save, 'gold')) : 0
+  const gold = kind === 'gold' ? Math.round(MOB_GOLD * reward * gearMult(save, 'armor') * rebirthBonus(save) * (1 + GREED_GOLD * save.skills.greed) * trait(save, 'gold')) : 0
   const exp = kind === 'exp' ? Math.round(MOB_EXP * reward * gearMult(save, 'ring') * trait(save, 'exp')) : 0
   return { kills, ms, fell, gold, exp }
 }
@@ -649,6 +680,9 @@ const joinJob = (a?: Job, b?: Job) => {
   return b.tier > a.tier || (b.tier === a.tier && b.at > a.at) ? b : a
 }
 
+/** How many times the save was reborn: rows from an earlier count are from before it. */
+const eraOf = (save: Save) => save.rebirth?.count ?? 0
+
 /** The pet two rows hold: the rarer, then the higher level. */
 const joinPet = (a?: Save['pet'], b?: Save['pet']) => {
   if (!a || !b) return a ?? b
@@ -660,11 +694,15 @@ const joinPet = (a?: Save['pet'], b?: Save['pet']) => {
  * reach the furthest. The position goes whole with the row that moved it last, so a retreat holds
  * against the rows ended sessions left further on; rows alike in that, the furthest.
  */
-export const join = (a: Save, b: Save): Save => {
+export const join = (x: Save, y: Save): Save => {
+  // A row from before a 환생 the other has seen brings only what the 환생 kept.
+  const a = eraOf(x) < eraOf(y) ? carried(x) : x
+  const b = eraOf(y) < eraOf(x) ? carried(y) : y
   const later = b.moved !== a.moved ? b.moved > a.moved : b.kills !== a.kills ? b.kills > a.kills : b.dmg > a.dmg
   const at = later ? b : a
   const job = joinJob(a.job, b.job)
   const pet = joinPet(a.pet, b.pet)
+  const rebirth = x.rebirth && y.rebirth ? (eraOf(y) > eraOf(x) ? y.rebirth : x.rebirth) : (x.rebirth ?? y.rebirth)
   return {
     v: 1,
     exp: a.exp + b.exp,
@@ -685,22 +723,27 @@ export const join = (a: Save, b: Save): Save => {
     moved: at.moved,
     ...(job && { job }),
     ...(pet && { pet }),
+    ...(rebirth && { rebirth }),
     ...((a.forge || b.forge) && { forge: perSlot(slot => Math.max(forgeOf(a, slot), forgeOf(b, slot))) }),
   }
 }
 
 /** This session's row: what its save holds past `rest`, everyone else's shares joined. */
-export const share = (mine: Save, rest: Save): Save => ({
-  ...mine,
-  exp: mine.exp - rest.exp,
-  gold: mine.gold - rest.gold,
-  enhance: mine.enhance - rest.enhance,
-  vit: mine.vit - rest.vit,
-  critRate: mine.critRate - rest.critRate,
-  critDmg: mine.critDmg - rest.critDmg,
-  haste: mine.haste - rest.haste,
-  skills: perSkill(id => mine.skills[id] - rest.skills[id]),
-})
+export const share = (mine: Save, x: Save): Save => {
+  // Shares from before this save's 환생 are not its to owe.
+  const rest = eraOf(x) < eraOf(mine) ? carried(x) : x
+  return {
+    ...mine,
+    exp: mine.exp - rest.exp,
+    gold: mine.gold - rest.gold,
+    enhance: mine.enhance - rest.enhance,
+    vit: mine.vit - rest.vit,
+    critRate: mine.critRate - rest.critRate,
+    critDmg: mine.critDmg - rest.critDmg,
+    haste: mine.haste - rest.haste,
+    skills: perSkill(id => mine.skills[id] - rest.skills[id]),
+  }
+}
 
 /** The save to play on: every share joined, held to what a save may be. */
 export const total = (rest: Save, own: Save): Save => {
@@ -749,7 +792,10 @@ export const parseSave = (raw: unknown): Save => {
   // A save from before exp was whole may hold a fraction.
   const job = parseJob(raw.job)
   // Fields from before the fight: absent, or bad, each reads as where a fresh fight stands.
-  const { vit, critRate, critDmg, haste, best, hurt, ms, lap, moved, forge, pet } = raw
+  const { vit, critRate, critDmg, haste, best, hurt, ms, lap, moved, forge, pet, rebirth } = raw
+  const reborn = isRecord(rebirth) && isWhole(rebirth.count) && rebirth.count > 0 && isWhole(rebirth.points)
+    ? { count: rebirth.count, points: rebirth.points }
+    : undefined
   const kept = isRecord(pet) && isWhole(pet.rarity, 4) && pet.rarity > 0 && isWhole(pet.level, MAX_PET_LEVEL)
     ? { rarity: pet.rarity as 1 | 2 | 3 | 4, level: pet.level }
     : undefined
@@ -775,5 +821,6 @@ export const parseSave = (raw: unknown): Save => {
     ...(job && { job }),
     ...(forged && { forge: forged }),
     ...(kept && { pet: kept }),
+    ...(reborn && { rebirth: reborn }),
   }
 }

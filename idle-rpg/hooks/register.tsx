@@ -8,6 +8,11 @@ import {
   EXAM_NAME,
   EXP_PER_USD,
   gachaCost,
+  rebirth,
+  rebirthBonus,
+  rebirthGain,
+  rebirthOf,
+  REBIRTH_STAGE,
   petCost,
   DUNGEON_MS,
   DUNGEON_NAMES,
@@ -544,6 +549,13 @@ const STAT_VERBS: Record<string, Stat> = { 강화: 'enhance', 체력: 'vit', 치
 const petText = (x: Save) =>
   x.pet ? `${RARITY_NAMES[x.pet.rarity]} ${PET_NAMES[x.pet.rarity]} Lv.${x.pet.level} (자동 공격마다 공격력 +${Math.round(petPower(x) * 100)}%)` : '없음'
 
+/** 환생 so far, and what one now would give. */
+const rebirthText = (x: Save) => {
+  const { count, points } = rebirthOf(x)
+  const so = count > 0 ? `${count}회 · 포인트 ${points} (공격력·골드 x${Number(rebirthBonus(x).toFixed(1))})` : '아직 없음'
+  return `${so} · ${stageOf(x.best) >= REBIRTH_STAGE ? `지금 하면 포인트 +${rebirthGain(x)}` : `스테이지 ${REBIRTH_STAGE}부터`}`
+}
+
 export const report = (x: Save) => {
   const { level, into, need } = levelInfo(x.exp)
   const gear = SLOTS.map(slot => {
@@ -558,6 +570,7 @@ export const report = (x: Save) => {
     `능력치: ${statLine(x)}`,
     `장비: ${gear.join(' · ')}`,
     `펫: ${petText(x)}`,
+    `환생: ${rebirthText(x)}`,
     ...(missionLine(x) ? [`오늘의 미션: ${missionLine(x)}`] : []),
     `스킬 (남은 포인트 ${skillPoints(x)}): ${SKILLS.map(id => `${SKILL_NAMES[id]} ${x.skills[id]}/${MAX_SKILL}`).join(' · ')}`,
     `다음 강화: ${amount(enhanceCost(x))}골드 · 체력 강화: ${amount(enhanceCost(x, 'vit'))}골드 · ${EXTRA_STATS.map(stat => `${STAT_NAMES[stat]}: ${priceOf(x, stat)}`).join(' · ')} · 뽑기: ${amount(gachaCost(x))}골드`,
@@ -572,6 +585,7 @@ export const report = (x: Save) => {
     `  /rpg 속도 [최대]: 공격 속도 +2% (최대 +${statMax('haste')})`,
     `  /rpg 던전 <골드|경험치>: 하루 ${DUNGEON_RUNS}번씩, 가장 멀리 간 스테이지 몬스터를 ${DUNGEON_MS / 1000}초 동안 사냥해 5배 보상`,
     '  /rpg 도전: 반복 사냥 중에 남은 바퀴를 건너뛰고 바로 다시 도전',
+    `  /rpg 환생: 스테이지 ${REBIRTH_STAGE}부터, 장비·합성·펫만 남기고 처음부터 다시 (10스테이지마다 포인트 1, 포인트마다 공격력·골드 +10% 영구)`,
     `  /rpg 펫: 펫 뽑기 ${amount(petCost(x))}골드 (같거나 낮은 등급이 나오면 지금 펫 레벨 +1)`,
     '  /rpg 뽑기: 무작위 장비 (일반 60% · 희귀 28% · 영웅 10% · 전설 2%)',
     ...SKILLS.map(id => `  /rpg 스킬 ${SKILL_NAMES[id]}: ${SKILL_HELP[id]}`),
@@ -937,7 +951,7 @@ const setOn = async ($: EngineInterface, on: boolean) => {
 
 const command = async ($: EngineInterface, args: string): Promise<string> => {
   const [verb = '', arg = ''] = args.normalize('NFC').trim().split(/\s+/)
-  const settle = async (result: Purchase, say: (x: Save, note: string) => string) => {
+  const settle = async (result: Purchase, say: (x: Save, note: string) => string | Promise<string>) => {
     if ('refused' in result) return result.refused
     await sync($, false)
     return say(await read($, save), result.note)
@@ -983,6 +997,25 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
     return settle(await buy($, x => learn(x, id)), (x, note) => `${note} 습득! 남은 포인트 ${skillPoints(x)}.`)
   }
   if (verb === '던전') return enterDungeon($, arg)
+  if (verb === '환생') {
+    const now = await $.clock.now()
+    if (arg !== '확인') {
+      const x = await read($, save)
+      const result = rebirth(x, now)
+      if ('refused' in result) return result.refused
+      sure = true
+      return `환생하면 스테이지·골드·레벨·능력치·스킬·전직이 처음으로 돌아가요. 장비·합성·펫은 그대로예요. 포인트 +${rebirthGain(x)} (1포인트마다 공격력과 골드 +10% 영구). 하려면 /rpg 환생 확인`
+    }
+    return settle(await buy($, x => rebirth(x, now)), async (x, note) => {
+      // The day's missions count from where the hero starts over; what they paid stays paid.
+      if (daily) {
+        daily = { ...daily, from: dayStart(x) }
+        await $.store.set(DAILY, daily)
+      }
+      $.ui.toast(note)
+      return note
+    })
+  }
   if (verb === '도전') {
     const now = await $.clock.now()
     return settle(await buy($, x => challengeNow(x, now)), (_, note) => note)
@@ -1150,6 +1183,10 @@ const run = async ($: EngineInterface, args: string) => {
 // --- The pane: the same commands, a key each.
 
 const PANE = 'rpg'
+const TABS = ['성장', '장비·펫', '던전·도전', '전직·스킬'] as const
+/** The pane's tab, and whether 환생 was just asked for, so [y] can confirm it; a reload clears both. */
+let tab = 0
+let sure = false
 const LINE_KEYS: Record<JobLine, string> = { melee: 'q', magic: 'w', ranged: 'r', rogue: 'a' }
 
 const openPane = async ($: EngineInterface) => {
@@ -1162,8 +1199,15 @@ const togglePane = async ($: EngineInterface) => {
   await openPane($)
 }
 
+const showTab = ($: EngineInterface, next: number) => {
+  tab = next
+  sure = false
+  $.ui.invalidate('ui.render')
+}
+
 /** A pane key: the command it stands for, its answer kept under the buttons. */
 const press = async ($: EngineInterface, args: string) => {
+  sure = false
   const note = await run($, args)
   await update($, pane, () => ({ picking: false, note }))
   $.ui.invalidate('ui.render')
@@ -1173,8 +1217,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'rpg',
-      description: '방치형 RPG: 상태·메뉴 보기, 강화, 체력 강화, 치명타·공격 속도, 보스 도전, 던전, 뽑기, 펫, 스킬, 전직',
-      argumentHint: '[강화 [최대] | 체력 [최대] | 치명·치피·속도 [최대] | 도전 | 던전 <골드|경험치> | 뽑기 | 펫 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
+      description: '방치형 RPG: 상태·메뉴 보기, 강화, 체력 강화, 치명타·공격 속도, 보스 도전, 던전, 뽑기, 펫, 스킬, 전직, 환생',
+      argumentHint: '[강화 [최대] | 체력 [최대] | 치명·치피·속도 [최대] | 도전 | 던전 <골드|경험치> | 뽑기 | 펫 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 환생 [확인] | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
     })
     // A reload over atoms an older version wrote: fields it never knew read as a fresh save's.
     await update($, save, x => ({ ...fresh(), ...x }))
@@ -1184,6 +1228,8 @@ export const register: Register = on => {
     const keptSize = await $.store.get('size')
     size = keptSize === 'big' ? 'big' : 'small'
     auto = (await $.store.get('auto')) === true
+    tab = 0
+    sure = false
     systemAt = -Infinity
     checkSystem($, await $.clock.now())
     const stored = await $.store.get('on')
@@ -1271,34 +1317,62 @@ export const register: Register = on => {
           </Box>
         )}
         {missionLine(x) !== '' && <Text>오늘의 미션: {missionLine(x)}</Text>}
-        <Text>
-          장비: {SLOTS.map(slot => `${SLOT_NAMES[slot]} ${RARITY_NAMES[x.gear[slot]]}${stars(x, slot)}`).join(' · ')} · 펫: {petText(x)}
-        </Text>
         <Box columnGap={2} flexWrap="wrap">
-          {key('e', `강화 (${amount(enhanceCost(x))}골드)`, '강화')}
-          {key('m', '강화 최대', '강화 최대')}
-          {key('h', `체력 강화 (${amount(enhanceCost(x, 'vit'))}골드)`, '체력')}
-          {key('v', '체력 최대', '체력 최대')}
-          {key('u', `자동 강화: ${auto ? '켜짐' : '꺼짐'}`, '자동')}
-          {key('g', `뽑기 (${amount(gachaCost(x))})`, '뽑기')}
-          {key('k', `펫 뽑기 (${amount(petCost(x))})`, '펫')}
+          {TABS.map((name, i) => (
+            <Button key={`tab-${name}`} plain label={i === tab ? `[${name}]` : name} onPress={() => showTab($, i)} />
+          ))}
+          <Button key="tab-next" plain hotkey="n" label="다음 탭" onPress={() => showTab($, (tab + 1) % TABS.length)} />
         </Box>
-        <Box columnGap={2} flexWrap="wrap">
-          {key('d', `골드 던전 (${runsLeft('gold')}/${DUNGEON_RUNS})`, '던전 골드')}
-          {key('f', `경험치 던전 (${runsLeft('exp')}/${DUNGEON_RUNS})`, '던전 경험치')}
-        </Box>
-        <Box columnGap={2} flexWrap="wrap">
-          {key('i', `치명타 확률 +${x.critRate} (${priceOf(x, 'critRate')})`, '치명')}
-          {key('o', `치명타 피해 +${x.critDmg} (${priceOf(x, 'critDmg')})`, '치피')}
-          {key('p', `공격 속도 +${x.haste} (${priceOf(x, 'haste')})`, '속도')}
-        </Box>
-        <Box columnGap={2} flexWrap="wrap">
-          <Text>스킬 (포인트 {skillPoints(x)}):</Text>
-          {SKILLS.map((id, i) => key(String(i + 1), `${SKILL_NAMES[id]} ${x.skills[id]}/${MAX_SKILL}`, `스킬 ${SKILL_NAMES[id]}`))}
-        </Box>
-        <Box columnGap={2} flexWrap="wrap">
-          {jobRow()}
-        </Box>
+        {tab === 0 && (
+          <Box flexDirection="column">
+            <Box columnGap={2} flexWrap="wrap">
+              {key('e', `강화 (${amount(enhanceCost(x))}골드)`, '강화')}
+              {key('m', '강화 최대', '강화 최대')}
+              {key('h', `체력 강화 (${amount(enhanceCost(x, 'vit'))}골드)`, '체력')}
+              {key('v', '체력 최대', '체력 최대')}
+              {key('u', `자동 강화: ${auto ? '켜짐' : '꺼짐'}`, '자동')}
+            </Box>
+            <Box columnGap={2} flexWrap="wrap">
+              {key('i', `치명타 확률 +${x.critRate} (${priceOf(x, 'critRate')})`, '치명')}
+              {key('o', `치명타 피해 +${x.critDmg} (${priceOf(x, 'critDmg')})`, '치피')}
+              {key('p', `공격 속도 +${x.haste} (${priceOf(x, 'haste')})`, '속도')}
+            </Box>
+          </Box>
+        )}
+        {tab === 1 && (
+          <Box flexDirection="column">
+            <Text>장비: {SLOTS.map(slot => `${SLOT_NAMES[slot]} ${RARITY_NAMES[x.gear[slot]]}${stars(x, slot)}`).join(' · ')}</Text>
+            <Text>펫: {petText(x)}</Text>
+            <Box columnGap={2} flexWrap="wrap">
+              {key('g', `뽑기 (${amount(gachaCost(x))})`, '뽑기')}
+              {key('k', `펫 뽑기 (${amount(petCost(x))})`, '펫')}
+            </Box>
+          </Box>
+        )}
+        {tab === 2 && (
+          <Box flexDirection="column">
+            <Text>상대: {foe(x)} · 최고 스테이지 {stageOf(x.best)}</Text>
+            <Box columnGap={2} flexWrap="wrap">
+              {key('d', `골드 던전 (${runsLeft('gold')}/${DUNGEON_RUNS})`, '던전 골드')}
+              {key('f', `경험치 던전 (${runsLeft('exp')}/${DUNGEON_RUNS})`, '던전 경험치')}
+            </Box>
+          </Box>
+        )}
+        {tab === 3 && (
+          <Box flexDirection="column">
+            <Box columnGap={2} flexWrap="wrap">
+              <Text>스킬 (포인트 {skillPoints(x)}):</Text>
+              {SKILLS.map((id, i) => key(String(i + 1), `${SKILL_NAMES[id]} ${x.skills[id]}/${MAX_SKILL}`, `스킬 ${SKILL_NAMES[id]}`))}
+            </Box>
+            <Box columnGap={2} flexWrap="wrap">
+              {jobRow()}
+            </Box>
+            <Box columnGap={2} flexWrap="wrap">
+              <Text>환생: {rebirthText(x)}</Text>
+              {stageOf(x.best) >= REBIRTH_STAGE && (sure ? key('y', '환생 확인', '환생 확인') : key('z', '환생', '환생'))}
+            </Box>
+          </Box>
+        )}
         <Box columnGap={2}>
           {key('t', `테마: ${THEME_NAMES[theme]}`, '테마')}
           {key('s', `크기: ${SIZE_NAMES[size]}`, '크기')}
