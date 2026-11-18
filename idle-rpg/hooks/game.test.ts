@@ -13,7 +13,8 @@ import {
   costExp,
   enhance,
   enhanceCost,
-  examNeed,
+  autoEnhance,
+  challenge,
   foeOf,
   fresh,
   gacha,
@@ -23,6 +24,10 @@ import {
   learn,
   levelOf,
   lineChangeCost,
+  maxHp,
+  dayStart,
+  missionProgress,
+  STAGE_MS,
   questReward,
   parseSave,
   share,
@@ -53,7 +58,7 @@ test('a stage 1 monster falls to the third auto attack and pays gold and exp', (
 })
 
 test('time short of one attack does nothing', () => {
-  expect(apply(fresh(), { type: 'tick', ms: 1499 }, never)).toEqual({ save: fresh(), hits: [] })
+  expect(apply(fresh(), { type: 'tick', ms: 1499 }, never)).toEqual({ save: fresh(), hits: [], fails: [] })
 })
 
 test('ten kills make a stage, and the tenth is a boss with 8x the hp and 5x the reward', () => {
@@ -70,19 +75,74 @@ test('ten kills make a stage, and the tenth is a boss with 8x the hp and 5x the 
   expect(foeOf(save).hp).toBe(30) // 25 x 1.18, rounded
 })
 
-test('a boss the hero cannot fell in 40 hits waits: the stage keeps paying, and attack brings it out', () => {
-  const stuck = having({ kills: 209 }) // stage 21: the boss has 5479 hp, the hero 10 attack
-  expect(foeOf(stuck)).toMatchObject({ boss: false, need: 137, hp: 685 })
+test('the boss always steps out; a hero too weak for the stage falls, laps the stage before it, and tries again', () => {
+  const stuck = having({ kills: 205 }) // stage 21: 10 attack and 100 hp against 685-hp monsters
+  expect(foeOf(stuck)).toMatchObject({ boss: false, hp: 685 })
+  expect(foeOf(having({ kills: 219 }))).toMatchObject({ boss: true, name: '레거시 골렘' })
 
+  const fell = apply(stuck, { type: 'tick', ms: 30_000 }, never, 7)
+  expect(fell.fails).toContain('fall')
+  // Back at the start of stage 20 with full hp and a fresh clock, a lap to run; nothing lost.
+  let back = stuck
+  for (let fails: string[] = []; fails.length === 0; ) ({ save: back, fails } = apply(back, { type: 'tick', ms: 1500 }, never, 7))
+  expect(back).toMatchObject({ kills: 190, lap: 10, hurt: 0, ms: 0, dmg: 0, best: 205, moved: 7 })
+
+  // An hour of it pays, and never takes the hero past the wall.
   const hour = apply(stuck, { type: 'tick', ms: 3_600_000 }, never)
-  expect(hour.save.kills).toBe(209)
+  expect(stageOf(hour.save.best)).toBe(21)
   expect(hour.save.gold).toBeGreaterThan(1000)
-  expect(hour.hits.filter(h => h.killed).every(h => !h.advanced && !h.boss)).toBe(true)
 
-  const ready = bought(enhance({ ...hour.save, gold: 1e6 }, true))
-  expect(attack(ready)).toBeGreaterThanOrEqual(137)
-  expect(foeOf(ready)).toMatchObject({ boss: true, need: 0, hp: 5479 })
-  expect(apply(ready, { type: 'tick', ms: 3_600_000 }, never).save.kills).toBeGreaterThan(209)
+  // Grown enough, the next challenge clears the wall.
+  const ready = autoEnhance({ ...hour.save, gold: 1e9 })
+  expect(challenge(ready).ms).toBeLessThan(STAGE_MS)
+  expect(challenge(ready).hurt).toBeLessThan(maxHp(ready))
+  expect(stageOf(apply(ready, { type: 'tick', ms: 3_600_000 }, never).save.best)).toBeGreaterThan(21)
+})
+
+test('a challenge the clock runs out on falls back too, but a retreat lap has no clock', () => {
+  // Hp to spare and too little attack: stage 21 takes far past the limit.
+  const slow = having({ kills: 200, vit: 200 })
+  const timed = apply(slow, { type: 'tick', ms: STAGE_MS + 1500 }, never)
+  expect(timed.fails).toEqual(['time'])
+  expect(timed.save).toMatchObject({ kills: 190, lap: 10 })
+
+  // The same hero runs its lap of stage 20 to the end, however long, and is back at stage 21.
+  let x = timed.save
+  for (let i = 0; i < 200 && x.lap > 0; i++) {
+    const next = apply(x, { type: 'tick', ms: 60_000 }, never)
+    expect(next.fails).toEqual([])
+    x = next.save
+  }
+  expect(x).toMatchObject({ kills: 200, lap: 0 })
+})
+
+test('a lap the hero falls in runs again, one more stage back if it made no kill; stage 1 is fought again, with nothing lost', () => {
+  const lapping = having({ kills: 195, lap: 5, hurt: 99, ms: 1000 })
+  const again = apply(lapping, { type: 'tick', ms: 1500 }, never)
+  expect(again.fails).toEqual(['lap'])
+  expect(again.save).toMatchObject({ kills: 190, lap: 10, hurt: 0 })
+  const bare = apply(having({ kills: 190, lap: 10, hurt: 99, ms: 1000 }), { type: 'tick', ms: 1500 }, never)
+  expect(bare.fails).toEqual(['lap'])
+  expect(bare.save).toMatchObject({ kills: 180, lap: 10 })
+
+  const first = apply(having({ kills: 4, hurt: 99, gold: 40, ms: 1500 }), { type: 'tick', ms: 1500 }, never)
+  expect(first.fails).toEqual(['fall'])
+  expect(first.save).toMatchObject({ kills: 0, lap: 0, gold: 40 })
+})
+
+test("the day's stage mission counts the furthest stage, so a retreat and its retry count nothing", () => {
+  // The day began mid-lap at stage 9, stage 10 already reached; back on 10 is no new ground.
+  const from = dayStart(having({ kills: 85, lap: 5, best: 95 }))
+  expect(missionProgress('stage', having({ kills: 95, best: 95 }), from)).toBe(0)
+  expect(missionProgress('stage', having({ kills: 100, best: 105 }), from)).toBe(1)
+  expect(dayStart(having({ enhance: 3, vit: 4 })).enhance).toBe(7)
+})
+
+test('a new stage starts with full hp and a fresh clock, and the furthest reach only climbs', () => {
+  const { save } = apply(having({ kills: 9, dmg: 195, hurt: 50, ms: 40_000, best: 9 }), { type: 'tick', ms: 1500 }, never)
+  expect(save).toMatchObject({ kills: 10, hurt: 0, ms: 0, best: 10 })
+  expect(maxHp(fresh())).toBe(100)
+  expect(maxHp(having({ exp: LV10, vit: 2 }))).toBe(Math.round(190 * 1.21))
 })
 
 test('a tool call strikes 3x, flurry adds a second strike, crit multiplies by 2.5', () => {
@@ -183,19 +243,25 @@ test('a skill costs a point, which a level gives, and stops at 5', () => {
   expect('refused' in learn(having({ exp: 1e6, skills: { flurry: 5, crit: 0, greed: 0 } }), 'flurry')).toBe(true)
 })
 
-test('shares join: counters add, gear keeps the better piece, the furthest position wins whole', () => {
+test('shares join: counters add, gear keeps the better piece, the latest position wins whole', () => {
   const rest = having({ gold: 180, kills: 22, exp: 1500, dmg: 99, enhance: 1, gear: { weapon: 1, armor: 2, ring: 0 } })
   const mine = having({ gold: 230, kills: 25, exp: 1600, dmg: 7, enhance: 3, gear: { weapon: 3, armor: 0, ring: 0 } })
 
   const own = share(mine, rest)
   expect(own).toMatchObject({ gold: 50, exp: 100, enhance: 2, kills: 25, dmg: 7 })
-  expect(total(rest, own)).toEqual({ ...mine, gear: { weapon: 3, armor: 2, ring: 0 } })
+  expect(total(rest, own)).toEqual({ ...mine, gear: { weapon: 3, armor: 2, ring: 0 }, best: 25 })
 
   // Kills are a place, not a count: two sessions at stage 3 are at stage 3.
   expect(join(having({ kills: 22, dmg: 99 }), having({ kills: 21, dmg: 400 }))).toMatchObject({ kills: 22, dmg: 99 })
   expect(join(having({ kills: 22, dmg: 5 }), having({ kills: 22, dmg: 9 })).dmg).toBe(9)
   // A session that starts fresh takes the position stored, damage dealt included.
   expect(total(having({ kills: 9, dmg: 150 }), share(fresh(), fresh()))).toMatchObject({ kills: 9, dmg: 150 })
+  // A row an ended session left further on loses to the one that moved last: a retreat holds.
+  const ended = having({ kills: 219, dmg: 806, best: 219, moved: 100 })
+  const retreated = having({ kills: 200, lap: 10, best: 219, moved: 200, vit: 3 })
+  expect(join(ended, retreated)).toMatchObject({ kills: 200, dmg: 0, lap: 10, moved: 200, best: 219, vit: 3 })
+  expect(total(ended, share(retreated, ended))).toMatchObject({ kills: 200, lap: 10, best: 219 })
+  expect(total(having({ vit: 2 }), having({ vit: -5 })).vit).toBe(0)
   // A share's gold is below zero when it spent what others earned; the save stops at 0.
   expect(total(having({ gold: 100 }), having({ gold: -30 })).gold).toBe(70)
   expect(total(having({ gold: 10 }), having({ gold: -30 })).gold).toBe(0)
@@ -203,7 +269,7 @@ test('shares join: counters add, gear keeps the better piece, the furthest posit
 })
 
 test('parseSave takes a stored save and nothing else', () => {
-  const good = having({ exp: 12, gold: 40, kills: 13, enhance: 2, dmg: 3, gear: { weapon: 2, armor: 0, ring: 4 } })
+  const good = having({ exp: 12, gold: 40, kills: 13, enhance: 2, dmg: 3, gear: { weapon: 2, armor: 0, ring: 4 }, vit: -1, best: 20, hurt: 7, ms: 900, lap: 3, moved: 5 })
   expect(parseSave(JSON.parse(JSON.stringify({ ...good, extra: 'x' })))).toEqual(good)
 
   const garbage: unknown[] = [
@@ -227,6 +293,10 @@ test('parseSave takes a stored save and nothing else', () => {
   for (const raw of garbage) expect(parseSave(raw)).toEqual(fresh())
   // A share may owe gold, and a save from before exp was whole is rounded.
   expect(parseSave({ ...good, gold: -30, exp: 12.5 })).toEqual({ ...good, gold: -30, exp: 13 })
+  // A row from before the fight, or with a bad fight field, stands where a fresh fight does.
+  const { vit, best, hurt, ms, lap, moved, ...old } = good
+  expect(parseSave(old)).toEqual({ ...good, vit: 0, best: 13, hurt: 0, ms: 0, lap: 0, moved: 0 })
+  expect(parseSave({ ...good, lap: 11, hurt: -1, best: 2 })).toEqual({ ...good, lap: 0, hurt: 0, best: 13 })
 })
 
 test('every sprite is a grid of palette colors that fits the scene', () => {
@@ -301,7 +371,7 @@ test('rows join the job whole: the higher tier, then the later change', () => {
 })
 
 test('parseSave keeps a good job and drops a bad one alone', () => {
-  const row = { ...fresh(), gold: 40, kills: 13 }
+  const row = { ...fresh(), gold: 40, kills: 13, best: 13 }
   const good = [
     { line: null, tier: 0, at: 0 },
     { line: 'magic', tier: 2, at: 99 },
@@ -327,7 +397,7 @@ const LV10 = 6802 // exp at Lv.10
 const LV30 = 434284
 const as = (line: 'melee' | 'magic' | 'ranged' | 'rogue', tier: 1 | 2 | 3, over: Partial<Save> = {}): Save => ({ ...fresh(), job: { line, tier, at: 0 }, ...over })
 
-test('전직 신청 sets a trial whose examiner stands in front once the hero could fell it, and felling it is the 전직', () => {
+test('전직 신청 sets a trial whose examiner steps in at once, and felling it is the 전직', () => {
   expect((applyJob(having({ exp: LV10 - 1 }), '마법', 5) as { refused: string }).refused).toContain('Lv.10부터')
   expect((applyJob(having({ exp: LV10 }), '', 5) as { refused: string }).refused).toContain('근접, 마법, 원거리, 암살')
 
@@ -335,7 +405,6 @@ test('전직 신청 sets a trial whose examiner stands in front once the hero co
   const trying = bought(applyJob(having({ exp: LV10, kills: 3 }), '마법', 5))
   expect(jobOf(trying)).toEqual({ line: null, tier: 0, at: 5, trial: { line: 'magic', hp: 600 } })
   expect('refused' in applyJob(trying, '마법', 6)).toBe(true)
-  expect(examNeed(trying)).toBe(15)
   expect(foeOf(trying)).toMatchObject({ exam: true, boss: false, hp: 600, name: '전직 시험관' })
 
   const { save, hits } = apply(trying, { type: 'tick', ms: 60_000 }, never, 1000)
@@ -344,7 +413,7 @@ test('전직 신청 sets a trial whose examiner stands in front once the hero co
   expect(hits.slice(fell + 1).every(h => h.exam === undefined)).toBe(true)
   // Paid as a stage boss, the stage not moved by it; the job moves instead.
   const after = apply(trying, { type: 'tick', ms: 1500 * (fell + 1) }, never, 1000).save
-  expect(after).toMatchObject({ kills: 3, dmg: 0, gold: 25, exp: LV10 + 30 })
+  expect(after).toMatchObject({ kills: 3, dmg: 0, gold: 25, exp: LV10 + 30, hurt: 0, ms: 0 })
   expect(jobOf(after)).toEqual({ line: 'magic', tier: 1, at: 1000 })
   expect(save.kills).toBeGreaterThan(3)
 
@@ -356,14 +425,20 @@ test('전직 신청 sets a trial whose examiner stands in front once the hero co
   expect('refused' in applyJob(as('rogue', 3, { exp: 1e12 }), '', 9)).toBe(true)
 })
 
-test('an examiner the hero cannot fell in 40 hits waits, and the stage goes on', () => {
-  const far = bought(applyJob(having({ exp: LV10, kills: 215 }), '근접', 1)) // stage 22: the examiner 19394 hp
-  expect(examNeed(far)).toBe(485)
-  expect(foeOf(far)).toEqual(foeOf(having({ exp: LV10, kills: 215 })))
-  expect(foeOf(far).exam).toBe(false)
-  const hour = apply(far, { type: 'tick', ms: 600_000 }, never).save
-  expect(hour.gold).toBeGreaterThan(0)
-  expect(jobOf(hour).trial?.hp).toBe(19394)
+test('an examiner too strong falls the hero back a stage for a lap, the trial kept, and steps in again after it', () => {
+  const far = bought(applyJob(having({ exp: LV10, kills: 215, dmg: 300 }), '근접', 1)) // stage 22: the examiner 19394 hp
+  expect(foeOf(far)).toMatchObject({ exam: true, hp: 19394 })
+  expect(far).toMatchObject({ dmg: 0, hurt: 0, ms: 0 })
+  const tried = apply(far, { type: 'tick', ms: 20_000 }, never)
+  expect(tried.fails).toEqual(['fall'])
+  expect(tried.save).toMatchObject({ kills: 200, lap: 10 })
+  expect(jobOf(tried.save).trial?.hp).toBe(19394)
+  expect(foeOf(tried.save).exam).toBe(false)
+  expect(foeOf({ ...tried.save, kills: 210, lap: 0 }).exam).toBe(true)
+  // At stage 1 the lap is of stage 1 itself, so the hero still earns between tries.
+  const early = bought(applyJob(having({ exp: LV10, kills: 2 }), '근접', 1))
+  const lapped = apply({ ...early, job: { ...jobOf(early), trial: { line: 'melee', hp: 1e9 } } }, { type: 'tick', ms: STAGE_MS }, never).save
+  expect(lapped).toMatchObject({ kills: 0, lap: 10 })
 })
 
 test('each line trains its trait, and every tier raises attack', () => {
@@ -408,7 +483,7 @@ test('계열 변경 keeps the tier and costs the next 20 강화', () => {
   expect(jobOf(changed)).toEqual({ line: 'magic', tier: 2, at: 9 })
 })
 
-test('a hero who idles and spends all gold on 강화 passes each 전직 within 3 simulated hours', () => {
+test('a hero who idles with 자동 강화 passes each 전직 within 3 simulated hours', () => {
   const MINUTE = 60_000
   // Idle a minute at a time, buying all the 강화 the gold allows: the laziest play there is.
   const idleUntil = (start: Save, done: (x: Save) => boolean) => {
@@ -416,8 +491,7 @@ test('a hero who idles and spends all gold on 강화 passes each 전직 within 3
     let ms = 0
     while (!done(x) && ms < 24 * 3_600_000) {
       x = apply(x, { type: 'tick', ms: MINUTE }, never, ms).save
-      const more = enhance(x, true)
-      if (!('refused' in more)) x = more.save
+      x = autoEnhance(x)
       ms += MINUTE
     }
     return { x, hours: ms / 3_600_000 }
@@ -490,6 +564,6 @@ test('합성 levels join by the higher per slot, and a bad one drops alone', () 
   expect(join(a, b).forge).toEqual({ weapon: 3, armor: 2, ring: 1 })
   expect(join(fresh(), fresh()).forge).toBeUndefined()
   expect(parseSave({ ...a, forge: { weapon: -1, armor: 0, ring: 0 } })).toEqual(fresh())
-  expect(parseSave({ ...a, kills: 4, forge: 'lots' })).toEqual({ ...fresh(), kills: 4 })
+  expect(parseSave({ ...a, kills: 4, forge: 'lots' })).toEqual({ ...fresh(), kills: 4, best: 4 })
   expect(parseSave(a).forge).toEqual(a.forge)
 })

@@ -28,8 +28,8 @@ import {
   changeLine,
   costExp,
   enhance,
+  autoEnhance,
   enhanceCost,
-  examNeed,
   foeOf,
   fresh,
   gacha,
@@ -41,6 +41,8 @@ import {
   levelInfo,
   levelOf,
   lineChangeCost,
+  maxHp,
+  STAGE_MS,
   mobIndex,
   zoneOf,
   MISSIONS,
@@ -59,7 +61,7 @@ import {
   total,
   trait,
 } from './game'
-import type { DayStart, GameEvent, Hit, Purchase } from './game'
+import type { DayStart, Fail, GameEvent, Hit, Purchase } from './game'
 import {
   BIG_BOSS,
   BIG_BOSS_STEP,
@@ -413,10 +415,12 @@ const foe = (x: Save) => {
   const { name, hp } = foeOf(x)
   return `${name} ${amount(Math.max(0, hp - x.dmg))}/${amount(hp)}`
 }
-const bossWait = (x: Save) => {
-  const { need } = foeOf(x)
-  return need > 0 ? `보스 ${BOSS_NAME}은 공격력 ${amount(need)}부터 나와요` : ''
-}
+const hpText = (x: Save) => `HP ${amount(Math.max(0, maxHp(x) - x.hurt))}/${amount(maxHp(x))}`
+/** The fight's clock: the time a challenge has left, or how far a retreat lap has come. */
+const clock = (x: Save) =>
+  x.lap > 0 ? `반복 사냥 ${KILLS_PER_STAGE - x.lap}/${KILLS_PER_STAGE}` : `${Math.max(0, Math.ceil((STAGE_MS - x.ms) / 1000))}초`
+/** While a retreat lap runs, what it leads back to. */
+const lapNote = (x: Save) => (x.lap > 0 ? `후퇴 중: 반복 사냥이 끝나면 ${jobOf(x).trial ? EXAM_NAME : `스테이지 ${stageOf(x.kills) + 1}`}에 다시 도전해요` : '')
 
 /** The level the next 전직 opens at, while none is pending; undefined past 3차 or mid-trial. */
 const nextTierLevel = (x: Save) => {
@@ -426,18 +430,13 @@ const nextTierLevel = (x: Save) => {
 /** Whether a 전직 can be applied for now. */
 const canApply = (x: Save) => levelOf(x.exp) >= (nextTierLevel(x) ?? Infinity)
 
-/** While a 전직 시험 waits on attack, what it asks for. */
-/** The band's word on a pending trial: how near the attack is to calling the examiner, or that it is up. */
+/** The band's word on a pending trial: the examiner up, or met again after the lap. */
 export const trialTag = (x: Save) => {
-  const need = examNeed(x)
-  if (need === 0) return ''
-  return foeOf(x).exam ? '[전직 시험 중]' : `[시험 공격력 ${amount(attack(x))}/${amount(need)}]`
+  if (!jobOf(x).trial) return ''
+  return foeOf(x).exam ? '[전직 시험 중]' : '[전직 시험 대기]'
 }
-
-const examWait = (x: Save) => {
-  const need = examNeed(x)
-  return need > 0 && !foeOf(x).exam ? `시험관은 공격력 ${amount(need)}부터` : ''
-}
+/** The trial's state in words, as the pane and the report put it. */
+const examState = (x: Save) => (foeOf(x).exam ? `${EXAM_NAME}과 전투 중` : `반복 사냥 뒤 ${EXAM_NAME}에 다시 도전`)
 
 const SKILL_HELP: Record<SkillId, string> = {
   flurry: '도구 호출 때 15%씩 한 번 더 강타',
@@ -457,8 +456,7 @@ const jobText = (x: Save) => {
   const job = jobOf(x)
   const parts = [job.line ? `${jobName(job)} (${JOBS[job.line].label} ${job.tier}차) · ${TRAIT_TEXT[job.line](x)}` : jobName(job)]
   if (job.trial) {
-    const wait = examWait(x)
-    parts.push(`전직 시험 중 → ${jobName({ line: job.trial.line, tier: (job.tier + 1) as 1 })} · ${wait || `${EXAM_NAME}과 전투 중`}`)
+    parts.push(`전직 시험 중 → ${jobName({ line: job.trial.line, tier: (job.tier + 1) as 1 })} · ${examState(x)}`)
   } else if (nextTierLevel(x) !== undefined) {
     parts.push(`${job.tier + 1}차 전직 Lv.${nextTierLevel(x)}부터${canApply(x) ? ' (지금 가능)' : ''}`)
   }
@@ -474,23 +472,25 @@ export const report = (x: Save) => {
   return [
     `${jobName(jobOf(x))} Lv.${level} · 다음 레벨까지 경험치 ${amount(Math.ceil(need - into))}`,
     `직업: ${jobText(x)}`,
-    `스테이지 ${stageLabel(x)} (${zoneName(x)}) · 상대: ${foe(x)}${bossWait(x) && ` · ${bossWait(x)}`}`,
-    `골드 ${amount(x.gold)} · 공격력 ${amount(attack(x))} · 강화 +${x.enhance}`,
+    `스테이지 ${stageLabel(x)} (${zoneName(x)}) · ${clock(x)} · 상대: ${foe(x)}${lapNote(x) && ` · ${lapNote(x)}`}`,
+    `골드 ${amount(x.gold)} · 공격력 ${amount(attack(x))} · 강화 +${x.enhance} · ${hpText(x)} · 체력 강화 +${x.vit}`,
     `장비: ${gear.join(' · ')}`,
     ...(missionLine(x) ? [`오늘의 미션: ${missionLine(x)}`] : []),
     `스킬 (남은 포인트 ${skillPoints(x)}): ${SKILLS.map(id => `${SKILL_NAMES[id]} ${x.skills[id]}/${MAX_SKILL}`).join(' · ')}`,
-    `다음 강화: ${amount(enhanceCost(x))}골드 · 뽑기: ${GACHA_COST}골드`,
+    `다음 강화: ${amount(enhanceCost(x))}골드 · 체력 강화: ${amount(enhanceCost(x, 'vit'))}골드 · 뽑기: ${GACHA_COST}골드`,
+    `스테이지마다 ${STAGE_MS / 1000}초 안에 10마리를 잡아야 해요. 시간이 지나거나 쓰러지면 이전 스테이지로 후퇴해 한 바퀴 돈 뒤 다시 도전해요.`,
     '',
     '명령',
     '  /rpg 강화: 공격력 10% 증가 (한 번)',
     '  /rpg 강화 최대: 골드가 되는 만큼 강화',
+    '  /rpg 체력 [최대]: 최대 HP 10% 증가 (한 번, 또는 골드가 되는 만큼)',
     '  /rpg 뽑기: 무작위 장비 (일반 60% · 희귀 28% · 영웅 10% · 전설 2%)',
     ...SKILLS.map(id => `  /rpg 스킬 ${SKILL_NAMES[id]}: ${SKILL_HELP[id]}`),
     '  /rpg 전직 [근접|마법|원거리|암살]: Lv.10·30·60부터 전직 시험 신청 (인턴은 계열을 골라요)',
     `  /rpg 계열 <이름>: 같은 차수에서 계열 바꾸기 (다음 강화 20번 값, 지금 ${amount(lineChangeCost(x))}골드)`,
     `  /rpg 테마 [시스템|다크|라이트]: 사냥터 색 (지금 ${THEME_NAMES[theme]})`,
     `  /rpg 크기 [작게|크게]: 사냥터 크기 (지금 ${SIZE_NAMES[size]})`,
-    `  /rpg 자동 [켜기|끄기]: 골드가 쌓이는 대로 강화, 다음 전직 자동 신청 (지금 ${auto ? '켜짐' : '꺼짐'})`,
+    `  /rpg 자동 [켜기|끄기]: 골드가 쌓이는 대로 공격·체력 강화, 다음 전직 자동 신청 (지금 ${auto ? '켜짐' : '꺼짐'})`,
     '  /rpg 끄기 · /rpg 켜기: 띠 숨기기 · 다시 보이기 (꺼도 사냥은 계속돼요)',
   ].join('\n')
 }
@@ -575,11 +575,13 @@ export const news = (before: Save, after: Save, hits: readonly Hit[]) => {
   const said: string[] = []
   const [from, to] = [levelOf(before.exp), levelOf(after.exp)]
   if (to > from) said.push(`레벨 업! Lv.${to} · 스킬 포인트 +${to - from}`)
-  if (hits.some(h => h.killed && h.boss)) said.push(`보스 ${BOSS_NAME} 처치! 스테이지 ${stageLabel(after)}`)
-  if (zoneOf(after.kills) !== zoneOf(before.kills)) said.push(`새 지역: ${zoneName(after)}! ${zoneStages(after)}`)
+  // Only ground never reached before is news: a retreat and its retry say nothing.
+  const reached = stageOf(after.best) > stageOf(before.best)
+  if (reached && hits.some(h => h.killed && h.boss)) said.push(`보스 ${BOSS_NAME} 처치! 스테이지 ${stageOf(after.best)}`)
+  if (reached && zoneOf(after.best) !== zoneOf(before.best)) said.push(`새 지역: ${zoneName({ ...after, kills: after.best })}! ${zoneStages({ ...after, kills: after.best })}`)
   const opens = nextTierLevel(before)
   const applied = !jobOf(before).trial && jobOf(after).trial
-  if (applied) said.push(`${jobOf(after).tier + 1}차 전직 시험 자동 신청! ${EXAM_NAME}은 공격력 ${amount(examNeed(after))}부터 나와요`)
+  if (applied) said.push(`${jobOf(after).tier + 1}차 전직 시험 자동 신청! ${STAGE_MS / 1000}초 안에 ${EXAM_NAME}을 쓰러뜨려요`)
   else if (opens !== undefined && from < opens && canApply(after)) {
     said.push(`전직 가능! Lv.${opens} 달성 · /rpg 전직${jobOf(after).tier === 0 ? ' <계열>' : ''}`)
   }
@@ -588,7 +590,8 @@ export const news = (before: Save, after: Save, hits: readonly Hit[]) => {
 }
 
 // --- 자동 강화: the person's setting, kept in the store; off unless asked. On, the gold goes to 강화
-// as it comes, but for one 뽑기's worth, and a hero with a line applies for the next 전직 once it may.
+// as it comes, attack or 체력 as the next challenge wants, but for one 뽑기's worth, and a hero with
+// a line applies for the next 전직 once it may.
 // ponytail: two sessions spend the same gold until a rescan shows each the other's spending; the
 // rows then owe it, and the gold reads 0 until earnings pay it off. A per-store lock fixes it.
 
@@ -597,8 +600,7 @@ let auto = false
 /** The save with what 자동 강화 buys out of its gold, and the next 전직 applied for. */
 const grow = (x: Save, now: number) => {
   if (!auto) return x
-  const bought = enhance(x, true, GACHA_COST)
-  const s = 'refused' in bought ? x : bought.save
+  const s = autoEnhance(x, GACHA_COST)
   const job = jobOf(s)
   if (job.line === null || job.trial || !canApply(s)) return s
   const applied = applyJob(s, '', now)
@@ -614,20 +616,25 @@ const setAuto = async ($: EngineInterface, name: string) => {
   if (next) await buy($, x => ({ save: grow(x, now), note: '' }))
   await sync($, false)
   $.ui.invalidate('ui.render')
-  return next ? `자동 강화: 켜짐 (골드가 쌓이는 대로 강화하고 뽑기 ${GACHA_COST}골드는 남겨요)` : '자동 강화: 꺼짐'
+  return next ? `자동 강화: 켜짐 (골드가 쌓이는 대로 공격·체력을 강화하고 뽑기 ${GACHA_COST}골드는 남겨요)` : '자동 강화: 꺼짐'
 }
+
+/** A failed challenge, said once as it happens; a fall mid-lap says nothing, the band shows the lap. */
+export const failNote = (fail: Fail, after: Save) =>
+  `${fail === 'time' ? '시간 초과' : '쓰러졌어요'}! 스테이지 ${stageOf(after.kills)}에서 반복 사냥 뒤 다시 도전해요`
 
 /** A catch-up this long or longer is time away: it says what came of it. */
 const AWAY_MS = 10 * 60_000
 
-/** What time away brought: the kills, the gold and exp they paid, and what 자동 강화 bought. */
-export const awayNote = (ms: number, hits: readonly Hit[], gold: number, exp: number, enhanced: number, label = '자리 비운') => {
+/** What time away brought: the kills, the gold and exp they paid, what 자동 강화 bought, the retreats. */
+export const awayNote = (ms: number, hits: readonly Hit[], gold: number, exp: number, enhanced: number, label = '자리 비운', fails = 0) => {
   const minutes = Math.floor(ms / 60_000)
   const hours = Math.floor(minutes / 60)
   const away = [hours > 0 && `${hours}시간`, minutes % 60 > 0 && `${minutes % 60}분`].filter(Boolean).join(' ')
   const kills = hits.filter(hit => hit.killed).length
   const parts = [`몬스터 ${amount(kills)}마리 처치`, `골드 +${amount(gold)}`, `경험치 +${amount(exp)}`]
   if (enhanced > 0) parts.push(`자동 강화 +${enhanced}`)
+  if (fails > 0) parts.push(`후퇴 ${fails}번`)
   return `${label} ${away} 동안: ${parts.join(' · ')}`
 }
 
@@ -662,6 +669,7 @@ const GROW_MS = 10 * 60_000
 const play = async ($: EngineInterface, event: GameEvent, away?: { ms: number; label: string; tail?: string }) => {
   const now = await $.clock.now()
   let hits: Hit[] = []
+  let fails: Fail[] = []
   let left = 0
   let earned = 0 // gold the hits paid, before 자동 강화 spends it
   let before = fresh()
@@ -673,6 +681,7 @@ const play = async ($: EngineInterface, event: GameEvent, away?: { ms: number; l
       return grow(next.save, now)
     }
     hits = []
+    fails = []
     earned = 0
     let s = x
     let rest = event.ms
@@ -680,6 +689,7 @@ const play = async ($: EngineInterface, event: GameEvent, away?: { ms: number; l
       const step = Math.min(rest, GROW_MS)
       const next = autoAttack(s, step, Math.random, now)
       hits.push(...next.hits)
+      fails.push(...next.fails)
       earned += next.save.gold - s.gold
       s = grow(next.save, now)
       rest = rest - step + next.left
@@ -693,9 +703,13 @@ const play = async ($: EngineInterface, event: GameEvent, away?: { ms: number; l
   scene.queue = [...scene.queue, ...hits].slice(-QUEUE)
   if (event.type === 'tick' && (away || event.ms >= AWAY_MS)) {
     const { ms, label } = away ?? { ms: event.ms, label: '자리 비운' }
-    const note = awayNote(ms, hits, earned, after.exp - before.exp, after.enhance - before.enhance, label) + (away?.tail ?? '')
+    const bought = after.enhance + after.vit - before.enhance - before.vit
+    const note = awayNote(ms, hits, earned, after.exp - before.exp, bought, label, fails.length) + (away?.tail ?? '')
     $.ui.toast(note)
     await update($, pane, p => ({ ...p, note }))
+  } else {
+    const failed = fails.findLast(f => f !== 'lap')
+    if (failed) $.ui.toast(failNote(failed, after))
   }
   for (const text of news(before, after, hits)) $.ui.toast(text)
   return left
@@ -851,6 +865,13 @@ const command = async ($: EngineInterface, args: string): Promise<string> => {
     return settle(await buy($, x => enhance(x, arg === '최대')), x => {
       const count = x.enhance - before
       return `강화 +${x.enhance} 성공${count > 1 ? ` (${count}번)` : ''}! 공격력 ${amount(attack(x))}. ${goldLeft(x)}`
+    })
+  }
+  if (verb === '체력') {
+    const before = (await read($, save)).vit
+    return settle(await buy($, x => enhance(x, arg === '최대', 0, 'vit')), x => {
+      const count = x.vit - before
+      return `체력 강화 +${x.vit} 성공${count > 1 ? ` (${count}번)` : ''}! 최대 HP ${amount(maxHp(x))}. ${goldLeft(x)}`
     })
   }
   if (verb === '뽑기') {
@@ -1015,8 +1036,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'rpg',
-      description: '방치형 RPG: 상태·메뉴 보기, 강화, 뽑기, 스킬, 전직',
-      argumentHint: '[강화 [최대] | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
+      description: '방치형 RPG: 상태·메뉴 보기, 강화, 체력 강화, 뽑기, 스킬, 전직',
+      argumentHint: '[강화 [최대] | 체력 [최대] | 뽑기 | 스킬 <이름> | 전직 [계열] | 계열 <이름> | 테마 [이름] | 크기 [작게|크게] | 자동 [켜기|끄기] | 끄기 | 켜기]',
     })
     const kept = await $.store.get('theme')
     theme = THEMES.find(t => t === kept) ?? 'system'
@@ -1081,7 +1102,7 @@ export const register: Register = on => {
           <Button key="cancel" plain hotkey="x" label="취소" onPress={() => update($, pane, p => ({ ...p, picking: false }))} />,
         ]
       }
-      if (job.trial) return [<Text key="label">전직 시험 중 → {jobName({ line: job.trial.line, tier: (job.tier + 1) as 1 })} · {examWait(x) || `${EXAM_NAME}과 전투 중`}</Text>]
+      if (job.trial) return [<Text key="label">전직 시험 중 → {jobName({ line: job.trial.line, tier: (job.tier + 1) as 1 })} · {examState(x)}</Text>]
       const change = job.line && (
         <Button key="change" plain hotkey="c" label="계열 변경" onPress={() => update($, pane, p => ({ ...p, picking: true }))} />
       )
@@ -1096,18 +1117,21 @@ export const register: Register = on => {
             ⚔ {jobName(job)} Lv.{levelOf(x.exp)}
           </Text>
           <Text>
-            스테이지 {stageLabel(x)} · {zoneName(x)}
+            스테이지 {stageLabel(x)} · {zoneName(x)} · {clock(x)}
           </Text>
         </Box>
         <Text>
-          골드 {amount(x.gold)} · 공격력 {amount(attack(x))} · 강화 +{x.enhance}
+          골드 {amount(x.gold)} · 공격력 {amount(attack(x))} · 강화 +{x.enhance} · {hpText(x)} · 체력 강화 +{x.vit}
           {canApply(x) && <Text color={SCENE.crit}> · 전직 가능</Text>}
         </Text>
+        {lapNote(x) !== '' && <Text color={SCENE.crit}>{lapNote(x)}</Text>}
         {missionLine(x) !== '' && <Text>오늘의 미션: {missionLine(x)}</Text>}
         <Text>장비: {SLOTS.map(slot => `${SLOT_NAMES[slot]} ${RARITY_NAMES[x.gear[slot]]}${stars(x, slot)}`).join(' · ')}</Text>
         <Box columnGap={2} flexWrap="wrap">
           {key('e', `강화 (${amount(enhanceCost(x))}골드)`, '강화')}
           {key('m', '강화 최대', '강화 최대')}
+          {key('h', `체력 강화 (${amount(enhanceCost(x, 'vit'))}골드)`, '체력')}
+          {key('v', '체력 최대', '체력 최대')}
           {key('u', `자동 강화: ${auto ? '켜짐' : '꺼짐'}`, '자동')}
           {key('g', `뽑기 (${GACHA_COST})`, '뽑기')}
         </Box>
@@ -1195,6 +1219,9 @@ export const register: Register = on => {
         <Text bold color={SCENE.crit}>
           Lv.{level}
         </Text>
+        <Text> 스테이지 {stageLabel(x)}</Text>
+        <Text color={x.hurt * 2 >= maxHp(x) ? SCENE.crit : '#5fd38a'}> {hpText(x)}</Text>
+        <Text bold={x.lap > 0} color={x.lap > 0 ? SCENE.crit : undefined}> {clock(x)}</Text>
         {canApply(x) && (
           <Text bold color={SCENE.crit}>
             {' '}
@@ -1215,15 +1242,12 @@ export const register: Register = on => {
         )}
         <Text color="#5fd38a"> {expBar(x)}</Text>
         <Text>
-          {'  '}스테이지 {stageLabel(x)}
           {'  '}골드 {amount(x.gold)}
           {'  '}공격력 {amount(attack(x))}
         </Text>
         <Text dimColor>
           {'  '}
           {foe(x)}
-          {bossWait(x) && ' (보스 대기)'}
-          {examWait(x) && ` · ${examWait(x)}`}
         </Text>
       </Text>
       </Box>

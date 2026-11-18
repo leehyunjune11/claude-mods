@@ -39,6 +39,18 @@ export type IdleRpgSave = {
   skills: Record<IdleRpgSkillId, number>
   /** Damage already dealt to the current monster. */
   dmg: number
+  /** How many times 체력 강화 was bought; a share like `enhance`. */
+  vit: number
+  /** The furthest `kills` ever reached: what the day's stage mission and the news count from. */
+  best: number
+  /** Damage the hero has taken since the stage began; at max hp the hero falls. */
+  hurt: number
+  /** Time spent in this stage's attempt (ms): a challenge past the limit fails. */
+  ms: number
+  /** Kills left of a retreat lap, run with no time limit; 0 = challenging the stage. */
+  lap: number
+  /** When the position (kills, dmg, hurt, ms, lap) last moved (ms): rows take the latest whole. */
+  moved: number
   /**
    * The hero's job, absolute like the position: rows join it whole, the higher tier and then the
    * later change winning. Absent on saves from before jobs, and read as 인턴.

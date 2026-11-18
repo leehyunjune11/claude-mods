@@ -32,10 +32,20 @@ const HP_GROWTH = 1.18
 const REWARD_GROWTH = 1.12
 const BOSS_HP = 8
 const BOSS_REWARD = 5
-/** The boss steps out once this many plain hits would fell it. */
-const BOSS_TRIES = 40
 /** The 전직 시험관 has this many times the stage boss's hp, fixed when the hero applies. */
 const EXAM_HP = 3
+/** A challenge clears its stage's 10 kills, or fells the examiner, within this or falls back. */
+export const STAGE_MS = 120_000
+/** The monster standing strikes the hero this often, while time passes. */
+const MOB_HIT_MS = 2000
+const MOB_ATK = 1
+const ATK_GROWTH = 1.12
+/** The boss and the examiner strike this many times harder. */
+const BOSS_ATK = 3
+const HERO_HP = 100
+const HP_PER_LEVEL = 10
+/** Each 체력 강화 multiplies max hp; its price climbs as 강화's does, on its own count. */
+const VIT_HP = 1.1
 /** A 계열 변경 costs what the next this many 강화 would. */
 const LINE_CHANGE_ENHANCES = 20
 
@@ -121,6 +131,12 @@ export const fresh = (): Save => ({
   gear: perSlot(() => 0),
   skills: perSkill(() => 0),
   dmg: 0,
+  vit: 0,
+  best: 0,
+  hurt: 0,
+  ms: 0,
+  lap: 0,
+  moved: 0,
 })
 
 /** The hero's job; a save from before jobs is an 인턴. */
@@ -162,35 +178,54 @@ export const gearMult = (save: Save, slot: Slot) => (GEAR_MULT[slot][save.gear[s
 export const attack = (save: Save) =>
   Math.round((8 + 2 * levelOf(save.exp)) * ENHANCE_ATTACK ** save.enhance * gearMult(save, 'weapon') * TIER_ATTACK[jobOf(save).tier])
 
-const stageHp = (save: Save) => MOB_HP * HP_GROWTH ** (stageOf(save.kills) - 1)
+const hpAt = (stage: number) => MOB_HP * HP_GROWTH ** (stage - 1)
+const atkAt = (stage: number) => MOB_ATK * ATK_GROWTH ** (stage - 1)
+const stageHp = (save: Save) => hpAt(stageOf(save.kills))
 /** What a stage's plain monster pays, before gear, skills and job. */
 const stageReward = (save: Save) => REWARD_GROWTH ** (stageOf(save.kills) - 1)
-/** The attack the pending 전직 시험관 asks for before it steps out; 0 with none pending. */
-export const examNeed = (save: Save) => {
-  const { trial } = jobOf(save)
-  return trial ? Math.ceil(trial.hp / BOSS_TRIES) : 0
-}
+
+/** The hero's max hp: the level's, times 체력 강화. */
+export const maxHp = (save: Save) => Math.round((HERO_HP + HP_PER_LEVEL * (levelOf(save.exp) - 1)) * VIT_HP ** save.vit)
 
 /**
- * Who the hero faces. A stage's 10th kill is its boss, but the boss waits until the hero could fell
- * it in BOSS_TRIES hits: until then the stage's monsters keep coming, for gold and exp and no
- * ground, so a hero short of attack still earns the gold that buys it. `need` is the attack the
- * waiting boss asks for.
+ * Who the hero faces, and what it strikes for. A stage's 10th kill is its boss. A pending 전직
+ * 시험관 steps in front of the stage whenever the hero is not running a retreat lap.
  */
 export const foeOf = (save: Save) => {
-  // A pending 전직 시험관 steps in front of the stage once the hero could fell it in BOSS_TRIES hits.
+  const atk = atkAt(stageOf(save.kills))
   const { trial } = jobOf(save)
-  if (trial && attack(save) >= examNeed(save)) return { boss: false, exam: true, need: 0, hp: trial.hp, name: EXAM_NAME }
-  const hp = stageHp(save)
-  const need = isBoss(save.kills) ? Math.ceil((hp * BOSS_HP) / BOSS_TRIES) : 0
-  const boss = need > 0 && attack(save) >= need
+  if (trial && save.lap === 0) return { boss: false, exam: true, hp: trial.hp, atk: Math.round(atk * BOSS_ATK), name: EXAM_NAME }
+  const boss = isBoss(save.kills)
   return {
     boss,
     exam: false,
-    need: boss ? 0 : need,
-    hp: Math.round(hp * (boss ? BOSS_HP : 1)),
+    hp: Math.round(stageHp(save) * (boss ? BOSS_HP : 1)),
+    atk: Math.round(atk * (boss ? BOSS_ATK : 1)),
     name: boss ? BOSS_NAME : (MOB_NAMES[mobIndex(save.kills)] ?? ''),
   }
+}
+
+/** The stage the hero challenges next: the one a retreat lap leads back to, or the one it is in. */
+export const challengeStage = (save: Save) => stageOf(save.kills) + (save.lap > 0 ? 1 : 0)
+
+/**
+ * What the next challenge would take at the hero's auto pace from its start, tool calls aside: the
+ * time, and the damage taken. The examiner's, while a trial is pending; else the whole stage's.
+ */
+export const challenge = (save: Save) => {
+  const a = attack(save)
+  const pace = autoMs(save)
+  const fight = (hp: number, atk: number) => {
+    const ms = Math.ceil(hp / a) * pace
+    return { ms, hurt: (ms / MOB_HIT_MS) * atk }
+  }
+  const { trial } = jobOf(save)
+  const stage = challengeStage(save)
+  const atk = atkAt(stage)
+  if (trial) return fight(trial.hp, Math.round(atk * BOSS_ATK))
+  const mob = fight(Math.round(hpAt(stage)), Math.round(atk))
+  const boss = fight(Math.round(hpAt(stage) * BOSS_HP), Math.round(atk * BOSS_ATK))
+  return { ms: mob.ms * (KILLS_PER_STAGE - 1) + boss.ms, hurt: mob.hurt * (KILLS_PER_STAGE - 1) + boss.hurt }
 }
 export const skillPoints = (save: Save) =>
   Math.max(0, levelOf(save.exp) - 1 - SKILLS.reduce((sum, id) => sum + save.skills[id], 0))
@@ -217,7 +252,8 @@ export type MissionId = (typeof MISSIONS)[number]['id']
 const MISSION_KILLS = 300
 const MISSION_BONUS = 3
 
-export const dayStart = (save: Save): DayStart => ({ stage: stageOf(save.kills), enhance: save.enhance, level: levelOf(save.exp) })
+/** The furthest stage reached, so a retreat and its retry count nothing; 강화 counts both kinds. */
+export const dayStart = (save: Save): DayStart => ({ stage: stageOf(save.best), enhance: save.enhance + save.vit, level: levelOf(save.exp) })
 
 /** How far a mission is, from the day's start: never below 0, nor past its need. */
 export const missionProgress = (id: MissionId, save: Save, from: DayStart) => {
@@ -231,7 +267,10 @@ export const missionReward = (save: Save) => Math.round(MOB_GOLD * stageReward(s
 export const missionBonus = (save: Save) => missionReward(save) * MISSION_BONUS
 
 const costAt = (enhance: number) => Math.round(50 * ENHANCE_COST ** enhance)
-export const enhanceCost = (save: Save) => costAt(save.enhance)
+/** 강화 raises attack; 체력 강화 (`vit`) max hp. Each climbs in price on its own count. */
+export type Stat = 'enhance' | 'vit'
+export const STAT_NAMES: Record<Stat, string> = { enhance: '강화', vit: '체력 강화' }
+export const enhanceCost = (save: Save, stat: Stat = 'enhance') => costAt(save[stat])
 /** What a 계열 변경 costs: the next LINE_CHANGE_ENHANCES 강화 together. */
 export const lineChangeCost = (save: Save) =>
   Array.from({ length: LINE_CHANGE_ENHANCES }, (_, i) => costAt(save.enhance + i)).reduce((sum, n) => sum + n, 0)
@@ -241,25 +280,60 @@ const examHp = (save: Save) => Math.round(stageHp(save) * BOSS_HP * EXAM_HP)
 const strike = (s: Save, times: number, rng: Rng, now: number): { save: Save; hit: Hit } => {
   const crit = rng() < CRIT_CHANCE * s.skills.crit + trait(s, 'crit') / 100
   const dmg = Math.round(attack(s) * times * (crit ? CRIT_HIT : 1))
-  const { boss, exam, need, hp } = foeOf(s)
+  const { boss, exam, hp } = foeOf(s)
   const tag = exam ? { exam: true as const } : {}
-  // The examiner stands apart from the stage: felling it moves the job on, not the hero.
-  const advanced = need === 0 && !exam
   // A merge can leave more damage than the monster now standing has hp: it then falls to this hit.
-  if (s.dmg + dmg < hp) return { save: { ...s, dmg: s.dmg + dmg }, hit: { dmg, crit, killed: false, boss, advanced: false, ...tag } }
+  if (s.dmg + dmg < hp) return { save: { ...s, dmg: s.dmg + dmg, moved: now }, hit: { dmg, crit, killed: false, boss, advanced: false, ...tag } }
   const reward = stageReward(s) * (boss || exam ? BOSS_REWARD : 1)
   const job = jobOf(s)
-  return {
-    save: {
-      ...s,
-      dmg: 0,
-      kills: s.kills + (advanced ? 1 : 0),
-      gold: s.gold + Math.round(MOB_GOLD * reward * gearMult(s, 'armor') * (1 + GREED_GOLD * s.skills.greed) * trait(s, 'gold')),
-      exp: s.exp + Math.round(MOB_EXP * reward * gearMult(s, 'ring') * trait(s, 'exp')),
-      ...(exam && job.trial && { job: { line: job.trial.line, tier: (job.tier + 1) as Tier, at: Math.max(now, job.at + 1) } }),
-    },
-    hit: { dmg, crit, killed: true, boss, advanced, ...tag },
+  const paid = {
+    ...s,
+    dmg: 0,
+    moved: now,
+    gold: s.gold + Math.round(MOB_GOLD * reward * gearMult(s, 'armor') * (1 + GREED_GOLD * s.skills.greed) * trait(s, 'gold')),
+    exp: s.exp + Math.round(MOB_EXP * reward * gearMult(s, 'ring') * trait(s, 'exp')),
   }
+  // The examiner stands apart from the stage: felling it moves the job on, not the hero, and the
+  // stage goes on with a fresh clock and full hp.
+  if (exam && job.trial) {
+    const next = { line: job.trial.line, tier: (job.tier + 1) as Tier, at: Math.max(now, job.at + 1) }
+    return { save: { ...paid, job: next, hurt: 0, ms: 0 }, hit: { dmg, crit, killed: true, boss, advanced: false, ...tag } }
+  }
+  const kills = s.kills + 1
+  // A new stage starts the clock again with the hero's hp full; a lap's last kill is that start too.
+  const restart = kills % KILLS_PER_STAGE === 0 ? { hurt: 0, ms: 0 } : {}
+  return {
+    save: { ...paid, ...restart, kills, best: Math.max(s.best, kills), lap: Math.max(0, s.lap - 1) },
+    hit: { dmg, crit, killed: true, boss, advanced: true, ...tag },
+  }
+}
+
+/** Why a fight ended short: a challenge the hero fell in or ran out of time on, or a fall mid-lap. */
+export type Fail = 'fall' | 'time' | 'lap'
+
+/**
+ * Back from a failed fight, with full hp and a fresh clock. A failed challenge goes to the stage
+ * before for a lap, which leads back to the challenge; a lap the hero falls in runs again from its
+ * start. A lap that fell with no kill at all would never pay, so it goes back one more stage. Stage 1
+ * has none before it: a challenge of it is fought again, as lapping it would pass it untimed; the
+ * examiner, apart from the stage, is met again after a lap of stage 1.
+ */
+const retreat = (s: Save, exam: boolean, now: number): Save => {
+  const stage = stageOf(s.kills)
+  const earning = s.lap > 0 && s.lap < KILLS_PER_STAGE
+  const back = earning ? stage : Math.max(1, stage - 1)
+  const lap = back === stage && s.lap === 0 && !exam ? 0 : KILLS_PER_STAGE
+  return { ...s, kills: (back - 1) * KILLS_PER_STAGE, best: Math.max(s.best, s.kills), lap, dmg: 0, hurt: 0, ms: 0, moved: now }
+}
+
+/** `step` ms of the fight: the foe's blows land, and a challenge past STAGE_MS ends. */
+const endure = (s: Save, step: number, now: number): { save: Save; fail?: Fail } => {
+  const ms = s.ms + step
+  const { atk, exam } = foeOf(s)
+  const hurt = s.hurt + (Math.floor(ms / MOB_HIT_MS) - Math.floor(s.ms / MOB_HIT_MS)) * atk
+  if (hurt >= maxHp(s)) return { save: retreat(s, exam, now), fail: s.lap > 0 ? 'lap' : 'fall' }
+  if (s.lap === 0 && ms >= STAGE_MS) return { save: retreat(s, exam, now), fail: 'time' }
+  return { save: { ...s, ms, hurt, moved: now } }
 }
 
 /** An auto attack is the line's own skill this often, from 1차 on. */
@@ -280,26 +354,34 @@ export const ACTIVE_NAMES: Record<JobLine, string> = {
  */
 export const autoAttack = (save: Save, ms: number, rng: Rng, now = 0) => {
   const hits: Hit[] = []
+  const fails: Fail[] = []
   let s = save
   let left = ms
   for (let step = autoMs(s); left >= step; step = autoMs(s)) {
     left -= step
+    // The foe's blows over the swing land first: a hero they fell does not swing.
+    const endured = endure(s, step, now)
+    s = endured.save
+    if (endured.fail) {
+      fails.push(endured.fail)
+      continue
+    }
     const { line, tier } = jobOf(s)
     const skill = line !== null && rng() < ACTIVE_CHANCE ? line : undefined
     const struck = strike(s, skill ? ACTIVE_POWER[tier] : 1, rng, now)
     s = struck.save
     hits.push(skill ? { ...struck.hit, skill } : struck.hit)
   }
-  return { save: s, hits, left }
+  return { save: s, hits, fails, left }
 }
 
 /** The one way the game moves: time passing, a tool call, money spent. `now` stamps a 전직. */
-export const apply = (save: Save, event: GameEvent, rng: Rng, now = 0): { save: Save; hits: Hit[] } => {
-  if (event.type === 'exp') return { save: { ...save, exp: save.exp + event.exp }, hits: [] }
-  if (event.type === 'reward') return { save: { ...save, exp: save.exp + event.exp, gold: save.gold + event.gold }, hits: [] }
+export const apply = (save: Save, event: GameEvent, rng: Rng, now = 0): { save: Save; hits: Hit[]; fails: Fail[] } => {
+  if (event.type === 'exp') return { save: { ...save, exp: save.exp + event.exp }, hits: [], fails: [] }
+  if (event.type === 'reward') return { save: { ...save, exp: save.exp + event.exp, gold: save.gold + event.gold }, hits: [], fails: [] }
   if (event.type === 'tick') {
-    const { save: s, hits } = autoAttack(save, event.ms, rng, now)
-    return { save: s, hits }
+    const { save: s, hits, fails } = autoAttack(save, event.ms, rng, now)
+    return { save: s, hits, fails }
   }
   const count = 1 + (rng() < FLURRY_CHANCE * save.skills.flurry ? 1 : 0)
   const hits: Hit[] = []
@@ -309,7 +391,7 @@ export const apply = (save: Save, event: GameEvent, rng: Rng, now = 0): { save: 
     s = struck.save
     hits.push(struck.hit)
   }
-  return { save: s, hits }
+  return { save: s, hits, fails: [] }
 }
 
 /**
@@ -325,13 +407,33 @@ export const costExp = (lastUsd: number | undefined, usd: number, rate: number) 
 }
 
 /** One 강화, or with `max` as many as the gold buys, `keep` gold left over. */
-export const enhance = (save: Save, max = false, keep = 0): Purchase => {
+/** One 강화 of `stat`, or with `max` as many as the gold buys, `keep` gold left over. */
+export const enhance = (save: Save, max = false, keep = 0, stat: Stat = 'enhance'): Purchase => {
   let s = save
-  while (s.gold - enhanceCost(s) >= keep && (max || s === save)) s = { ...s, gold: s.gold - enhanceCost(s), enhance: s.enhance + 1 }
+  while (s.gold - enhanceCost(s, stat) >= keep && (max || s === save)) s = { ...s, gold: s.gold - enhanceCost(s, stat), [stat]: s[stat] + 1 }
   if (s === save) {
-    return { refused: `골드가 부족해요. 강화에는 ${enhanceCost(save)}골드가 필요해요 (보유 ${Math.floor(save.gold)}).` }
+    return { refused: `골드가 부족해요. ${STAT_NAMES[stat]}에는 ${enhanceCost(save, stat)}골드가 필요해요 (보유 ${Math.floor(save.gold)}).` }
   }
-  return { save: s, note: `강화 +${s.enhance} 성공!` }
+  return { save: s, note: `${STAT_NAMES[stat]} +${s[stat]} 성공!` }
+}
+
+/**
+ * The 강화 the next challenge wants: 체력 when its clock would be met but its blows would fell the
+ * hero; else attack, which shortens the fight and so the blows too.
+ */
+export const wanted = (save: Save): Stat => {
+  const next = challenge(save)
+  return next.ms < STAGE_MS && next.hurt >= maxHp(save) ? 'vit' : 'enhance'
+}
+
+/** 자동 강화: as many 강화 as the gold buys, `keep` left over, each of the kind the hero wants then. */
+export const autoEnhance = (save: Save, keep = 0) => {
+  let s = save
+  for (;;) {
+    const bought = enhance(s, false, keep, wanted(s))
+    if ('refused' in bought) return s
+    s = bought.save
+  }
 }
 
 export const gacha = (save: Save, rng: Rng): Purchase => {
@@ -374,7 +476,7 @@ const lineList = () => JOB_LINES.map(line => JOBS[line].label).join(', ')
 export const applyJob = (save: Save, name: string, now: number): Purchase => {
   const job = jobOf(save)
   if (job.tier >= 3) return { refused: `이미 3차 전직까지 마쳤어요 (${jobName(job)}).` }
-  if (job.trial) return { refused: `이미 전직 시험 중이에요. ${EXAM_NAME}은 공격력 ${examNeed(save)}부터 나와요.` }
+  if (job.trial) return { refused: `이미 전직 시험 중이에요 (${EXAM_NAME} HP ${job.trial.hp}).` }
   const need = TIER_LEVEL[job.tier + 1] ?? Infinity
   if (levelOf(save.exp) < need) return { refused: `${job.tier + 1}차 전직은 Lv.${need}부터예요 (지금 Lv.${levelOf(save.exp)}).` }
   const line = job.line ?? (name ? lineByName(name) : undefined)
@@ -383,9 +485,11 @@ export const applyJob = (save: Save, name: string, now: number): Purchase => {
     return { refused: `${job.tier + 1}차 전직은 지금 계열(${JOBS[job.line].label})로 해요. 계열을 바꾸려면 /rpg 계열 <이름>.` }
   }
   const trial = { line, hp: examHp(save) }
+  // Out of a lap the examiner steps in now, to a fresh clock and full hp; in one, when it ends.
+  const fight = save.lap === 0 ? { dmg: 0, hurt: 0, ms: 0, moved: now } : {}
   return {
-    save: { ...save, job: { ...job, trial, at: now } },
-    note: `${job.tier + 1}차 전직 시험 신청! ${EXAM_NAME}(HP ${trial.hp})을 쓰러뜨리면 ${jobName({ line, tier: (job.tier + 1) as Tier })}이(가) 돼요.`,
+    save: { ...save, ...fight, job: { ...job, trial, at: now } },
+    note: `${job.tier + 1}차 전직 시험 신청! ${EXAM_NAME}(HP ${trial.hp})을 ${STAGE_MS / 1000}초 안에 쓰러뜨리면 ${jobName({ line, tier: (job.tier + 1) as Tier })}이(가) 돼요.`,
   }
 }
 
@@ -423,21 +527,29 @@ const joinJob = (a?: Job, b?: Job) => {
 }
 
 /**
- * Two shares as one: counters add, gear keeps the better piece, the position is the furthest, the
- * job the higher.
+ * Two shares as one: counters add, gear keeps the better piece, the job the higher, the furthest
+ * reach the furthest. The position goes whole with the row that moved it last, so a retreat holds
+ * against the rows ended sessions left further on; rows alike in that, the furthest.
  */
 export const join = (a: Save, b: Save): Save => {
-  const far = b.kills > a.kills || (b.kills === a.kills && b.dmg > a.dmg) ? b : a
+  const later = b.moved !== a.moved ? b.moved > a.moved : b.kills !== a.kills ? b.kills > a.kills : b.dmg > a.dmg
+  const at = later ? b : a
   const job = joinJob(a.job, b.job)
   return {
     v: 1,
     exp: a.exp + b.exp,
     gold: a.gold + b.gold,
-    kills: far.kills,
+    kills: at.kills,
     enhance: a.enhance + b.enhance,
     gear: perSlot(slot => Math.max(a.gear[slot], b.gear[slot]) as Rarity),
     skills: perSkill(id => a.skills[id] + b.skills[id]),
-    dmg: far.dmg,
+    dmg: at.dmg,
+    vit: a.vit + b.vit,
+    best: Math.max(a.best, b.best),
+    hurt: at.hurt,
+    ms: at.ms,
+    lap: at.lap,
+    moved: at.moved,
     ...(job && { job }),
     ...((a.forge || b.forge) && { forge: perSlot(slot => Math.max(forgeOf(a, slot), forgeOf(b, slot))) }),
   }
@@ -449,6 +561,7 @@ export const share = (mine: Save, rest: Save): Save => ({
   exp: mine.exp - rest.exp,
   gold: mine.gold - rest.gold,
   enhance: mine.enhance - rest.enhance,
+  vit: mine.vit - rest.vit,
   skills: perSkill(id => mine.skills[id] - rest.skills[id]),
 })
 
@@ -461,6 +574,8 @@ export const total = (rest: Save, own: Save): Save => {
     exp: Math.max(0, Math.round(all.exp)),
     gold: Math.max(0, all.gold),
     enhance: Math.max(0, all.enhance),
+    vit: Math.max(0, all.vit),
+    best: Math.max(all.best, all.kills),
     skills: perSkill(id => Math.min(MAX_SKILL, Math.max(0, all.skills[id]))),
   }
 }
@@ -492,7 +607,8 @@ export const parseSave = (raw: unknown): Save => {
   if (!SLOTS.every(slot => isWhole(gear[slot], 4)) || !SKILLS.every(id => isShare(skills[id]))) return fresh()
   // A save from before exp was whole may hold a fraction.
   const job = parseJob(raw.job)
-  const { forge } = raw
+  // Fields from before the fight: absent, or bad, each reads as where a fresh fight stands.
+  const { vit, best, hurt, ms, lap, moved, forge } = raw
   const forged = isRecord(forge) && SLOTS.every(slot => isWhole(forge[slot], MAX_FORGE)) ? perSlot(slot => forge[slot] as number) : undefined
   return {
     v: 1,
@@ -503,6 +619,12 @@ export const parseSave = (raw: unknown): Save => {
     dmg,
     gear: perSlot(slot => gear[slot] as Rarity),
     skills: perSkill(id => skills[id] as number),
+    vit: isShare(vit) ? vit : 0,
+    best: Math.max(kills, isWhole(best) ? best : 0),
+    hurt: isCount(hurt) ? hurt : 0,
+    ms: isCount(ms) ? ms : 0,
+    lap: isWhole(lap, KILLS_PER_STAGE) ? lap : 0,
+    moved: isCount(moved) ? moved : 0,
     ...(job && { job }),
     ...(forged && { forge: forged }),
   }

@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 
 import type { IdleRpgSave as Save } from '../types'
 import { apply, autoAttack, fresh, join, levelOf, mobIndex, parseSave, questReward, stageOf, zoneOf } from './game'
-import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene, trialTag, awayNote } from './register'
+import { amount, bandLayout, isMoving, newScene, paintScene, rowsOf, stepScene, trialTag, awayNote, news } from './register'
 import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, PALETTE, SCENE, ZONE_SCENES } from './sprites'
 
 const BAND = {
@@ -330,7 +330,7 @@ test('another session saving at the same instant loses nothing', async ($, on) =
 
   // The other session, started from the same 100 gold, saves 50 gold and 10 kills mid-save.
   world.onSet = key => {
-    if (key === 's:sess-a') world.store['s:sess-b'] = stored({ gold: 50, kills: 10 })
+    if (key === 's:sess-a') world.store['s:sess-b'] = stored({ gold: 50, kills: 10, moved: NOON + 1 })
   }
   await endTurn($)
   expect(saved(world)).toMatchObject({ gold: 155, kills: 10 })
@@ -407,11 +407,36 @@ test('/rpg reports, buys and saves each purchase', async ($, on) => {
   expect(await rpg($, '춤')).toContain('모르는 명령')
 })
 
-test('/rpg says what attack a waiting boss asks for', async ($, on) => {
+test('/rpg tells the hp, the clock, and where a retreat lap leads', async ($, on) => {
   mock.clock(on, { now: NOON })
-  engine(on, { save: stored({ kills: 209 }) })
+  const world = engine(on, { save: stored({ kills: 205 }) })
   await start($)
-  expect(await rpg($)).toContain('보스 레거시 골렘은 공격력 137부터 나와요')
+  const challenging = await rpg($)
+  expect(challenging).toContain('HP 100/100')
+  expect(challenging).toContain('120초')
+  world.store['s:sess-b'] = stored({ kills: 190, lap: 4, best: 205, moved: NOON + 1 })
+  const lapping = await rpg($)
+  expect(lapping).toContain('반복 사냥 6/10')
+  expect(lapping).toContain('스테이지 21에 다시 도전')
+})
+
+test('a retreat holds across turn ends against a row an ended session left further on', async ($, on) => {
+  const clock = mock.clock(on, { now: NOON })
+  // An ended session left its row at stage 22's boss, an hour ago; this hero is too weak for it.
+  const world = engine(on, { save: stored({ kills: 219, dmg: 806, best: 219, moved: NOON - 3_600_000 }) })
+  await start($)
+  await clock.advance(60_000)
+  await endTurn($)
+  const back = saved(world)
+  expect(back.kills).toBeLessThan(219)
+  expect(back.best).toBe(219)
+  // The failed challenge says so once; the falls in the laps after it say nothing.
+  expect(world.toasts.filter(t => t.includes('반복 사냥 뒤 다시 도전해요'))).toHaveLength(1)
+  // Falling back as far as it must, it finds a stage it earns on.
+  await clock.advance(10 * 60_000)
+  await endTurn($)
+  expect(saved(world).kills).toBeLessThan(219)
+  expect(saved(world).gold).toBeGreaterThan(0)
 })
 
 test('/rpg 뽑기 spends 300 gold on a piece of gear', async ($, on) => {
@@ -728,7 +753,7 @@ test('a missing or broken quest file pays nothing and says nothing', async ($, o
   expect(world.store['quests-paid']).toBeUndefined()
   expect(world.toasts).toEqual([])
   // What it has is the half minute of hunting, and nothing more.
-  expect(saved(world)).toEqual(apply(fresh(), { type: 'tick', ms: 30_000 }, () => 0.99).save)
+  expect(saved(world)).toEqual(apply(fresh(), { type: 'tick', ms: 30_000 }, () => 0.99, NOON + 30_000).save)
 })
 
 test('sprites are ringed in the outline color, and the ring leaves the ground alone', () => {
@@ -829,17 +854,19 @@ test('with 크게 the frames between drawings are painted 크게 too', async ($,
   await ui.unmount()
 })
 
-test('a pending trial says on the band how near the attack is, then that the examiner is up', async ($, on) => {
+test('a pending trial says on the band that the examiner is up, or met again after the lap', async ($, on) => {
   mock.clock(on, { now: NOON })
-  const trial = (hp: number) => ({ ...stored({ exp: 6802 }), job: { line: null, tier: 0 as const, at: 1, trial: { line: 'rogue' as const, hp } } })
-  // 19394 hp over 40 tries: the examiner comes at attack 485; Lv.10's bare attack is 28.
-  expect(trialTag(parseSave(trial(19394)) as Save)).toBe('[시험 공격력 28/485]')
-  expect(trialTag(parseSave(trial(600)) as Save)).toBe('[전직 시험 중]')
+  const trial = (lap: number) => ({ ...stored({ exp: 6802, lap }), job: { line: null, tier: 0 as const, at: 1, trial: { line: 'rogue' as const, hp: 600 } } })
+  expect(trialTag(parseSave(trial(0)) as Save)).toBe('[전직 시험 중]')
+  expect(trialTag(parseSave(trial(4)) as Save)).toBe('[전직 시험 대기]')
   expect(trialTag(parseSave(stored({ exp: 6802 })) as Save)).toBe('')
-  const world = engine(on, { save: trial(19394) })
+  engine(on, { save: trial(0) })
   await start($)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /Lv\./ }))?.text).toContain('[시험 공격력 28/485]')
+  const band = (await ui.find({ type: 'Text', text: /Lv\./ }))?.text ?? ''
+  expect(band).toContain('[전직 시험 중]')
+  // The stage, hp and clock come right after the level, where a narrow band does not cut them.
+  expect(band).toMatch(/^Lv\.10 스테이지 1-1 HP [\d]+\/[\d]+ \d+초/)
   await ui.unmount()
 })
 
@@ -886,7 +913,7 @@ test('coming back after time away toasts what it brought, once, and a short gap 
   await endTurn($)
   const away = world.toasts.filter(t => t.startsWith('자리 비운'))
   expect(away).toHaveLength(1)
-  expect(away[0]).toMatch(/^자리 비운 2시간 13분 동안: 몬스터 [\d.,K]+마리 처치 · 골드 \+[\d.K]+ · 경험치 \+[\d.K]+$/)
+  expect(away[0]).toMatch(/^자리 비운 2시간 13분 동안: 몬스터 [\d.,K]+마리 처치 · 골드 \+[\d.K]+ · 경험치 \+[\d.K]+( · 후퇴 \d+번)?$/)
 })
 
 test('the away note counts kills, gold, exp, and 자동 강화 when it bought any', () => {
@@ -992,11 +1019,18 @@ test('every 25 stages is a new zone, with its own monsters and sky, and the move
 
   const clock = mock.clock(on, { now: NOON })
   // The last kill of stage 25 is its boss: an hour of hits fells it, at an attack that can.
-  const world = engine(on, { save: stored({ kills: at(25) + 9, enhance: 60 }) })
+  const world = engine(on, { save: stored({ kills: at(25) + 9, enhance: 60, vit: 20 }) })
   await start($)
   await clock.advance(60_000)
   await endTurn($)
   expect(world.toasts.filter(t => t.startsWith('새 지역'))).toEqual(['새 지역: 스파게티 늪! 스테이지 26~50'])
+
+  // A hero falling back over the border and climbing again says nothing: it has been there.
+  const boss = { dmg: 1, crit: false, killed: true, boss: true, advanced: true }
+  const been = stored({ kills: at(26), best: at(27) })
+  expect(news(been, { ...been, kills: at(25), lap: 10 }, [])).toEqual([])
+  expect(news({ ...been, kills: at(25) + 9 }, been, [boss])).toEqual([])
+  expect(news({ ...been, kills: at(27) + 9 }, { ...been, kills: at(28), best: at(28) }, [boss])).toEqual(['보스 레거시 골렘 처치! 스테이지 28'])
 })
 
 test("the day's missions count from where the day began, each pays once, and all three pay a bonus", async ($, on) => {
