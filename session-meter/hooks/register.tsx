@@ -901,7 +901,7 @@ export const register: Register = on => {
         description: '세션·기간별 요금, 컨텍스트, 캐시, 사용 한도 보기',
         argumentHint: '[backfill]',
       }),
-      $.command.register({ name: 'taxi', description: '계기판의 택시 켜기·끄기' }),
+      $.command.register({ name: 'taxi', description: '택시 계기판 켜기·끄기' }),
     ])
     const [u, now, id] = await Promise.all([$.session.usage(), $.clock.now(), $.session.id()])
     await update($, snap, s => ({ ...s, ...fromUsage(u), now }))
@@ -951,7 +951,7 @@ export const register: Register = on => {
     const wanted = !(await read($, taxiOn))
     await $.store.set('taxiOn', wanted)
     await update($, taxiOn, () => wanted)
-    return { text: wanted ? '택시를 켰어요.' : '택시를 껐어요.' }
+    return { text: wanted ? '택시 계기판을 켰어요.' : '택시 계기판을 껐어요. /meter 로는 계속 볼 수 있어요.' }
   })
 
   on('session.measure', async ($, e, next) => {
@@ -1026,25 +1026,20 @@ export const register: Register = on => {
   // Turn events, not e.props.isWorking, set the mode: isWorking also covers subagent turns, and a
   // render writes no state. Its flips still come here as redraws, which restart a stopped timer.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const s = await read($, snap)
-    if (e.props.hasSurvey || meterRows(s).length === 0) {
+    const [s, wanted] = await Promise.all([read($, snap), read($, taxiOn)])
+    // /taxi off hides the whole band, meter and all.
+    if (!wanted || e.props.hasSurvey || meterRows(s).length === 0) {
       stopAnim()
       return next(e)
     }
 
-    const [t, l, x, wanted, now] = await Promise.all([
-      read($, totals),
-      read($, ledger),
-      read($, taxi),
-      read($, taxiOn),
-      $.clock.now(),
-    ])
+    const [t, l, x, now] = await Promise.all([read($, totals), read($, ledger), read($, taxi), $.clock.now()])
     const full = bandRows(s, t, l, x, dayKey(now))
     // Off the terminal there is no road, so no panel. The layout measures the longer row.
-    const layout = wanted && e.surface === 'terminal' ? taxiLayout(full, e.props.bodyColumns, e.props.maxRows) : undefined
+    const layout = e.surface === 'terminal' ? taxiLayout(full, e.props.bodyColumns, e.props.maxRows) : undefined
     const roadCols = Math.min(MAX_RASTER_COLUMNS, e.props.bodyColumns - BOX_EDGE)
     const onTerminal = e.surface === 'terminal'
-    const roadRows = onTerminal ? layout?.rows : wanted ? MAX_TAXI_ROWS : undefined
+    const roadRows = onTerminal ? layout?.rows : MAX_TAXI_ROWS
     const rows = roadRows !== undefined && meterFits(roadCols, roadRows, s.usd ?? 0) ? bandRows(s, t, l, x, dayKey(now), true) : full
     const { Box, Text } = $.ui.resolve(e)
     const text = rows.map(row => (

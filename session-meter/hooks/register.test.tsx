@@ -1243,9 +1243,6 @@ test('the fare leaves the text while the panel draws it, on the desktop too, and
   const short = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 10 } }) // 5 rows of road
   expect(await short.find({ type: 'Text', text: /^요금/ })).toBeDefined()
   await short.unmount()
-
-  await run($, '', 'taxi')
-  expect((await fareRow(80)).fare).toContain('요금 $1.50')
 })
 
 const BAND_ROWS = (over: Partial<Parameters<typeof bandRows>[0]>, panel = false) =>
@@ -1410,26 +1407,29 @@ test('no pane opens, and the one 0.2.0 left up is closed', async ($, on) => {
   expect(world.closed).toEqual(['session-taxi'])
 })
 
-test('/taxi turns the taxi off and on, kept in the store, and off draws text with no timer', async ($, on) => {
+test('/taxi turns the whole band off and on, kept in the store, with no timer while off', async ($, on) => {
   const clock = mock.clock(on, { now: NOV_4 })
   const world = engine(on)
   const blit = blitter(on)
   await start($)
   await $.session.measure(cost(1))
 
-  expect((await run($, '', 'taxi')).text).toBe('택시를 껐어요.')
+  expect((await run($, '', 'taxi')).text).toContain('택시 계기판을 껐어요.')
   expect(world.store.taxiOn).toBe(false)
-  const off = await $.ui.mount(BAND)
-  expect(await off.find({ type: 'Raster' })).toBeUndefined()
-  expect(await off.find({ type: 'Text', text: /^요금/ })).toBeDefined()
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const off = await $.ui.mount({ ...BAND, surface })
+    expect(await off.find({ type: 'Raster' })).toBeUndefined()
+    expect(await off.find({ type: 'Text', text: /^연료/ })).toBeUndefined()
+    await off.unmount()
+  }
   await clock.advance(5000)
   expect(blit.count).toBe(0)
-  await off.unmount()
 
-  expect((await run($, '', 'taxi')).text).toBe('택시를 켰어요.')
+  expect((await run($, '', 'taxi')).text).toBe('택시 계기판을 켰어요.')
   expect(world.store.taxiOn).toBe(true)
   const up = await $.ui.mount(BAND)
   expect(await up.find({ type: 'Raster' })).toBeDefined()
+  expect(await up.find({ type: 'Text', text: /^연료/ })).toBeDefined()
   await up.unmount()
 })
 
