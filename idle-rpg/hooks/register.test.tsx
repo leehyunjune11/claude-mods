@@ -482,13 +482,16 @@ test('/rpg 뽑기 spends 300 gold on a piece of gear', async ($, on) => {
   expect(weapon + armor + ring).toBeGreaterThan(0)
 })
 
-test('/rpg 끄기 hides the band and the next session remembers', async ($, on) => {
+test('/rpg 끄기 hides the band and closes the menu, 켜기 brings both back, and the next session remembers', async ($, on) => {
   mock.clock(on, { now: NOON })
   const world = engine(on)
   await start($)
 
+  await rpg($)
+  expect(world.panes).toEqual(['rpg'])
   expect(await rpg($, '끄기')).toContain('껐어요')
   expect(world.store.on).toBe(false)
+  expect(world.panes).toEqual([])
   const off = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await off.find({ type: 'Text', text: /Lv\./ })).toBeUndefined()
   await off.unmount()
@@ -499,6 +502,7 @@ test('/rpg 끄기 hides the band and the next session remembers', async ($, on) 
   await still.unmount()
 
   await rpg($, '켜기')
+  expect(world.panes).toEqual(['rpg'])
   const back = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect(await back.find({ type: 'Text', text: /Lv\./ })).toBeDefined()
   await back.unmount()

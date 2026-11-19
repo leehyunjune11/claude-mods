@@ -953,7 +953,10 @@ const buy = async ($: EngineInterface, purchase: (x: Save) => Purchase) => {
 const setOn = async ($: EngineInterface, on: boolean) => {
   await $.store.set('on', on)
   await update($, meta, m => ({ ...m, on }))
-  return on ? '띠를 켰어요.' : '띠를 껐어요. 사냥은 계속돼요. /rpg 켜기 로 다시 볼 수 있어요.'
+  // The menu goes and comes with the band.
+  if (on) await openPane($).catch(() => {})
+  else if ((await $.ui.panes()).some(p => p.id === PANE)) await $.ui.close({ id: PANE })
+  return on ? '띠와 메뉴를 켰어요.' : '띠와 메뉴를 껐어요. 사냥은 계속돼요. /rpg 켜기 로 다시 볼 수 있어요.'
 }
 
 const command = async ($: EngineInterface, args: string): Promise<string> => {
