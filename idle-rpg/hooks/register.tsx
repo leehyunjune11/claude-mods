@@ -409,16 +409,17 @@ export const paintScene = (s: Scene, view: View, cols: number, scheme: Scheme = 
 const UPPER_HALF = 0x2580
 
 /** RasterProps `cells`: an upper half block per cell, its foreground the upper pixel. */
-export const sceneCells = (s: Scene, view: View, cols: number, scheme: Scheme = 'dark', size: Size = 'small') => {
+export const sceneCells = (s: Scene, view: View, cols: number, scheme: Scheme = 'dark', size: Size = 'small', rows = SIZES[size].rows) => {
   const p = paintScene(s, view, cols, scheme, size)
-  const { rows } = SIZES[size]
+  // Fewer rows than the size's cut the sky off from the top: the ground and who stands on it stay.
+  const cut = SIZES[size].rows - rows
   const words = new Uint32Array(cols * rows * 3)
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const at = (r * cols + c) * 3
       words[at] = UPPER_HALF
-      words[at + 1] = p[r * 2 * cols + c] ?? 0
-      words[at + 2] = p[(r * 2 + 1) * cols + c] ?? 0
+      words[at + 1] = p[(r + cut) * 2 * cols + c] ?? 0
+      words[at + 2] = p[((r + cut) * 2 + 1) * cols + c] ?? 0
     }
   }
   const bytes = new Uint8Array(words.buffer) as Uint8Array & { toBase64: () => string }
@@ -438,16 +439,21 @@ export const rowsOf = (node: unknown): number => {
   return stacked + (props?.borderStyle ? 2 : 0)
 }
 
+export type Layout = { size: Size; rows: number; line: boolean }
+
 /**
  * What this row draws in a band of `maxRows` where other plugins' rows take `others`: the scene in
- * the size asked for, or 작게 when 크게 does not fit, or the line alone.
+ * the size asked for and the line under it, or 작게 when 크게 does not fit. Short of room for both,
+ * the scene comes first, without the line and its sky cut down to the rows there are; the line
+ * alone only where two rows or the columns for the hero and a boss are not left.
  */
-export const bandLayout = (maxRows: number, columns: number, others: number, size: Size = 'small') => {
+export const bandLayout = (maxRows: number, columns: number, others: number, size: Size = 'small'): Layout => {
   const room = maxRows - others
   const fits = (at: Size) => room > SIZES[at].rows && columns >= SIZES[at].minCols
-  if (size === 'big' && fits('big')) return 'big'
-  if (fits('small')) return 'field'
-  return room >= 1 ? 'line' : 'none'
+  if (size === 'big' && fits('big')) return { size: 'big', rows: SIZES.big.rows, line: true }
+  if (fits('small')) return { size: 'small', rows: SIZES.small.rows, line: true }
+  if (room >= 2 && columns >= SIZES.small.minCols) return { size: 'small', rows: Math.min(room, SIZES.small.rows), line: false }
+  return { size: 'small', rows: 0, line: room >= 1 }
 }
 
 // --- Words.
@@ -606,6 +612,7 @@ let cols = MAX_COLS
 let shownSkill: JobLine | undefined // the skill the band's line last named
 let shownExam = false // whether the last frame drew the examiner
 let drawn: Size = 'small' // the size the band last laid out: the frames between draw at it
+let drawnRows = SIZES.small.rows // and the rows of it, fewer where the band is short
 let band = ''
 let anim: Timer | undefined
 let animFast = false
@@ -898,7 +905,7 @@ const frame = async ($: EngineInterface) => {
   }
   const view = viewOf(scene, x)
   shownExam = meetExaminer(scene, view.exam === true, shownExam)
-  const shown = await $.ui.blit({ requestId: band, key: RASTER, cells: sceneCells(scene, view, cols, scheme(), drawn) })
+  const shown = await $.ui.blit({ requestId: band, key: RASTER, cells: sceneCells(scene, view, cols, scheme(), drawn, drawnRows) })
   // An old frame still in flight has no say over the timer that replaced it.
   if (anim !== mine) return
   if (!shown.deny) {
@@ -1488,26 +1495,27 @@ export const register: Register = on => {
     if (e.surface !== 'terminal') return <Box flexDirection="column">{line}</Box>
     const width = Math.min(e.props.bodyColumns, MAX_COLS)
     // A collapsed band shows nothing: no field to keep drawing.
-    const layout = e.props.isCollapsed ? 'line' : bandLayout(e.props.maxRows, width, otherRows, size)
-    if (layout !== 'field' && layout !== 'big') {
+    const layout = e.props.isCollapsed ? { size: 'small' as const, rows: 0, line: true } : bandLayout(e.props.maxRows, width, otherRows, size)
+    if (layout.rows === 0) {
       stopAnim()
-      return layout === 'none' ? next(e) : <Box flexDirection="column">{line}</Box>
+      return layout.line ? <Box flexDirection="column">{line}</Box> : next(e)
     }
     working = e.props.isWorking
     cols = width
     band = e.requestId
     startAnim($, working && isMoving(scene))
     const { Raster } = $.ui.resolve(e)
-    drawn = layout === 'big' ? 'big' : 'small'
+    drawn = layout.size
+    drawnRows = layout.rows
     return (
       <Box flexDirection="column">
         <Raster
           key={RASTER}
           columns={cols}
-          rows={SIZES[drawn].rows}
-          cells={sceneCells(scene, viewOf(scene, x), cols, scheme(), drawn)}
+          rows={drawnRows}
+          cells={sceneCells(scene, viewOf(scene, x), cols, scheme(), drawn, drawnRows)}
         />
-        {line}
+        {layout.line && line}
       </Box>
     )
   })

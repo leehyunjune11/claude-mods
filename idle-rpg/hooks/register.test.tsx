@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 
 import type { IdleRpgSave as Save } from '../types'
 import { apply, autoAttack, fresh, join, levelOf, mobIndex, parseSave, questReward, stageOf, zoneOf } from './game'
-import { amount, bandLayout, fall, isMoving, meetExaminer, newScene, paintScene, rowsOf, stepScene, trialTag, awayNote, news } from './register'
+import { amount, bandLayout, sceneCells, fall, isMoving, meetExaminer, newScene, paintScene, rowsOf, stepScene, trialTag, awayNote, news } from './register'
 import { DAY_PALETTE, DAY_SCENE, LOOKS, MOBS, PALETTE, SCENE, ZONE_SCENES } from './sprites'
 
 const BAND = {
@@ -115,15 +115,27 @@ test('the band shows the status line on every surface, and the field only on the
   }
 })
 
-test('a short band, a collapsed one and a survey leave the field out', async ($, on) => {
+test('a short band shrinks the field and drops the line; a collapsed one and a survey leave the field out', async ($, on) => {
   const clock = mock.clock(on, { now: NOON })
   const world = engine(on)
   await start($)
 
-  const short = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, maxRows: 5 } })
-  expect(await short.find({ type: 'Text', text: /Lv\.1/ })).toBeDefined()
-  expect(await drawn(short)).not.toContain('"Raster"')
-  await short.unmount()
+  // Five rows: all the field, no line; three: the field less its top two rows of sky; one: the line.
+  for (const [maxRows, rows] of [[5, 5], [3, 3]] as const) {
+    const short = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, maxRows } })
+    expect(await short.find({ type: 'Text', text: /Lv\.1/ })).toBeUndefined()
+    expect(await drawn(short)).toContain(`"rows":${rows},`)
+    await short.unmount()
+  }
+  const one = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, maxRows: 1 } })
+  expect(await one.find({ type: 'Text', text: /Lv\.1/ })).toBeDefined()
+  expect(await drawn(one)).not.toContain('"Raster"')
+  await one.unmount()
+  // The shrunk field is the whole one's bottom rows: the ground and who stands on it.
+  // (Each row is 72 cells of 12 bytes, a multiple of 3: the base64 of the bottom rows ends the whole's.)
+  const cells = (rows: number) => sceneCells(newScene(), { kills: 0, boss: false, left: 1 }, 72, 'dark', 'small', rows)
+  expect(cells(3).length).toBe((cells(5).length * 3) / 5)
+  expect(cells(5).endsWith(cells(3))).toBe(true)
 
   // Collapsed, nothing of the band is on screen: no field, and nothing drawn into it.
   const collapsed = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isCollapsed: true } })
@@ -137,22 +149,30 @@ test('a short band, a collapsed one and a survey leave the field out', async ($,
   await survey.unmount()
 })
 
-test('beside the taxi the row takes only what the taxi leaves of maxRows', () => {
+test('beside the taxi the row takes only what the taxi leaves of maxRows, the scene before the line', () => {
   // The taxi's own rows: its 3 of text, and a road of up to 7 with a border of 2 where they fit.
   const taxi = (maxRows: number) => Math.min(maxRows, 12)
-  const rows = { big: 10, field: 6, line: 1, none: 0 }
+  const rowsOf = ({ rows, line }: { rows: number; line: boolean }) => rows + (line ? 1 : 0)
   for (let maxRows = 6; maxRows <= 40; maxRows++) {
     for (const size of ['small', 'big'] as const) {
-      expect(taxi(maxRows) + rows[bandLayout(maxRows, 72, taxi(maxRows), size)]).toBeLessThanOrEqual(maxRows)
+      expect(taxi(maxRows) + rowsOf(bandLayout(maxRows, 72, taxi(maxRows), size))).toBeLessThanOrEqual(maxRows)
     }
   }
-  expect([12, 13, 17, 18].map(maxRows => bandLayout(maxRows, 72, 12))).toEqual(['none', 'line', 'line', 'field'])
-  // Alone it needs its own six rows, and the columns for the hero and a boss.
-  expect([5, 6].map(maxRows => bandLayout(maxRows, 72, 0))).toEqual(['line', 'field'])
-  expect(bandLayout(40, 39, 0)).toBe('line')
+  const at = (maxRows: number, columns = 72, others = 12, size: 'small' | 'big' = 'small') => {
+    const { rows, line } = bandLayout(maxRows, columns, others, size)
+    return `${rows}${line ? '+line' : ''}`
+  }
+  // Short of room the scene shrinks, its sky cut, and the line goes first; one row is the line's.
+  expect([12, 13, 14, 16, 17, 18].map(maxRows => at(maxRows))).toEqual(['0', '0+line', '2', '4', '5', '5+line'])
+  // Alone it needs its own six rows for both, and the columns for the hero and a boss.
+  expect([5, 6].map(maxRows => at(maxRows, 72, 0))).toEqual(['5', '5+line'])
+  expect(at(40, 39, 0)).toBe('0+line')
   // 크게 takes ten rows and 70 columns, and falls back to 작게 where it does not fit.
-  expect([9, 10].map(maxRows => bandLayout(maxRows, 72, 0, 'big'))).toEqual(['field', 'big'])
-  expect(bandLayout(40, 69, 0, 'big')).toBe('field')
+  expect([9, 10].map(maxRows => bandLayout(maxRows, 72, 0, 'big'))).toEqual([
+    { size: 'small', rows: 5, line: true },
+    { size: 'big', rows: 9, line: true },
+  ])
+  expect(bandLayout(40, 69, 0, 'big')).toEqual({ size: 'small', rows: 5, line: true })
 })
 
 test('a row of another plugin in the band takes the field away where both do not fit', async ($, on) => {
@@ -180,11 +200,19 @@ test('a row of another plugin in the band takes the field away where both do not
     await list.unmount()
   }
 
+  // Two rows left beside it: the field, shrunk to them, and no line.
   await settle()
   const beside = await $.ui.mount({ ...BAND, surface: 'terminal', props })
-  expect(await drawn(beside)).not.toContain('"Raster"')
-  expect(await beside.find({ type: 'Text', text: /Lv\./ })).toBeDefined()
+  expect(await drawn(beside)).toContain('"rows":2,')
+  expect(await beside.find({ type: 'Text', text: /Lv\./ })).toBeUndefined()
   await beside.unmount()
+
+  // One: the line alone.
+  await settle()
+  const line = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...props, maxRows: 13 } })
+  expect(await drawn(line)).not.toContain('"Raster"')
+  expect(await line.find({ type: 'Text', text: /Lv\./ })).toBeDefined()
+  await line.unmount()
 
   await settle()
   const tight = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...props, maxRows: 12 } })
